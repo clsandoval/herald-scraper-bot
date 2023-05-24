@@ -1,7 +1,6 @@
 # %%
 from functions import *
 
-
 # %%
 json_data = query(days=2)
 matches = [i["match_id"] for i in json_data["rows"]]
@@ -16,7 +15,3 @@ for match_id, duration in zip(matches, durations):
         )
         send_message(message)
     time.sleep(0.5)
-
-# %%
-matches
-# %%
