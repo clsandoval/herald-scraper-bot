@@ -3,9 +3,12 @@ import pypika
 import json
 import requests
 import time
+from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
 
+
+TG_URL = "https://api.telegram.org/bot1982794836%3AAAGupWyxWjOtOiObaM3atPty8hL7OArAv94/sendMessage"
 STRATZ_GRAPHQL_URL = "https://api.stratz.com/graphql"
 OPENDOTA_URL = "https://api.opendota.com/api/"
 QUERY_HEADER = {
@@ -18,6 +21,17 @@ QUERY_HEADER = {
     "Accept-Language": "en-US,en;q=0.8",
     "Connection": "keep-alive",
 }
+STRATZ_QUERY = """{{
+  match(id:{}) {{
+  	radiantKills
+    direKills
+    durationSeconds
+    players{{
+      leaverStatus
+    }}
+  }}
+}}
+"""
 
 
 def query(url=OPENDOTA_URL, days=1):
@@ -50,27 +64,71 @@ def query(url=OPENDOTA_URL, days=1):
     return json_data
 
 
-def remove_leavers(data):
-    match_ids = set()
-    match_data = data["data"]["matches"]
-    if match_data == None:
-        print(data)
-    for match in match_data:
-        match_id = match["id"]
-        player_data = match["players"]
-        for player in player_data:
-            if (
-                player["leaverStatus"] == "DISCONNECTED_TOO_LONG"
-                or player["leaverStatus"] == "ABANDONED"
-                or player["leaverStatus"] == "AFK"
-            ):
-                match_ids.add(match_id)
-    return match_ids
+def ret_kill_density(data, duration):
+    match_data = data["data"]["match"]
+    radiantKills = sum(match_data["radiantKills"])
+    direKills = sum(match_data["radiantKills"])
+    totalKills = radiantKills + direKills
+    kill_density = totalKills / duration
+    for status in match_data["players"]:
+        if (
+            status["leaverStatus"] == "DISCONNECTED_TOO_LONG"
+            or status["leaverStatus"] == "ABANDONED"
+            or status["leaverStatus"] == "AFK"
+        ):
+            return -1, -1
+    return totalKills, kill_density
 
 
-def ret_kill_density(data):
-    pass
+def send_message(message):
+    payload = {
+        "text": message,
+        "disable_web_page_preview": False,
+        "disable_notification": False,
+        "chat_id": "1405224455",
+    }
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
+        "Content-Type": "application/json",
+    }
+    with requests.Session() as s:
+        s.keep_alive = False
+        response = s.request("POST", TG_URL, json=payload, headers=headers, timeout=5)
+    payload = {
+        "text": message,
+        "disable_web_page_preview": False,
+        "disable_notification": False,
+        "chat_id": "1057769032",
+    }
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
+        "Content-Type": "application/json",
+    }
+    with requests.Session() as s:
+        s.keep_alive = False
+        response = s.request("POST", TG_URL, json=payload, headers=headers, timeout=5)
+        print("Telegram Message Status {}".format(response))
 
 
-def send_details():
-    pass
+def query_stratz(
+    match,
+    url=STRATZ_GRAPHQL_URL,
+    stratz_query=STRATZ_QUERY,
+    api_token=STRATZ_API_TOKEN,
+):
+    headers = {"Authorization": f"Bearer {api_token}"}
+    url = url
+    stratz_query = stratz_query.format(match)
+    stratz_query = stratz_query.replace("{{", "{")
+    stratz_query = stratz_query.replace("}}", "}")
+    while True:
+        try:
+            r = requests.post(url, json={"query": stratz_query}, headers=headers)
+            break
+        except:
+            print("Stratz timeout, retrying in 1 second")
+            time.sleep(1)
+    data = json.loads(r.text)
+    return data
