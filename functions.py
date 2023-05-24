@@ -48,7 +48,7 @@ def query(url=OPENDOTA_URL, days=1):
         )
         .where(public_matches.start_time >= d_t)
         .where(public_matches.avg_rank_tier <= 16)
-        .where(public_matches.duration > 3000)
+        .where(public_matches.duration > 4200)
     )
     request = url + base_sql + urllib.parse.quote(str(q))
     print(request)
