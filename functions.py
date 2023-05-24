@@ -69,7 +69,7 @@ def ret_kill_density(data, duration):
     radiantKills = sum(match_data["radiantKills"])
     direKills = sum(match_data["radiantKills"])
     totalKills = radiantKills + direKills
-    kill_density = totalKills / duration
+    kill_density = totalKills / (duration / 60)
     for status in match_data["players"]:
         if (
             status["leaverStatus"] == "DISCONNECTED_TOO_LONG"
