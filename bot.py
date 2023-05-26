@@ -1,8 +1,11 @@
 # %%
 from functions import *
+import logging
 
 # %%
-json_data = query(days=2)
+logging.info("Start Herald Match Scraping")
+json_data = query(days=1)
+logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
 dates = [
@@ -19,5 +22,6 @@ for match_id, duration, date in zip(matches, durations, dates):
         )
         send_message(message)
     time.sleep(0.5)
+logging.info("TG Messages Sent")
 
 # %%

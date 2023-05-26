@@ -3,6 +3,7 @@ import pypika
 import json
 import requests
 import time
+import logging
 from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
@@ -48,17 +49,16 @@ def query(url=OPENDOTA_URL, days=1):
         )
         .where(public_matches.start_time >= d_t)
         .where(public_matches.avg_rank_tier <= 16)
-        .where(public_matches.duration > 4200)
+        .where(public_matches.duration > 4500)
     )
     request = url + base_sql + urllib.parse.quote(str(q))
-    print(request)
     req = urllib.request.Request(url=request, headers=QUERY_HEADER)
     while True:
         try:
             data = urllib.request.urlopen(req)
             break
         except:
-            print("Timeout, retrying in 60 seconds")
+            logging.warning("Timeout, retrying in 60 seconds")
             time.sleep(60)
     json_data = json.loads(data.read())
     return json_data
