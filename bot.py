@@ -25,3 +25,6 @@ for match_id, duration, date in zip(matches, durations, dates):
 logging.info("TG Messages Sent")
 
 # %%
+for match_id, duration in sorted(list(zip(matches, durations)), key=lambda x: x[1]):
+    print(match_id, duration)
+# %%
