@@ -4,7 +4,7 @@ import logging
 
 # %%
 logging.info("Start Herald Match Scraping")
-json_data = query(days=1)
+json_data = query(days=7)
 logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
