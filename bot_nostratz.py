@@ -1,3 +1,4 @@
+# %%
 from functions import *
 import logging, time
 
@@ -10,6 +11,7 @@ dates = [
     datetime.utcfromtimestamp(int(i["start_time"])).strftime("%Y-%m-%d %H:%M:%S")
     for i in json_data["rows"]
 ]
+# %% kill density = kills/duration
 
 for match, duration, date in zip(matches, durations, dates):
     message = "{}\nMatch: opendota.com/matches/{}\nDuration: {}".format(

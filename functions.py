@@ -64,6 +64,20 @@ def query(url=OPENDOTA_URL, days=1):
     return json_data
 
 
+def get_match_data_nostratz(match_id):
+    request = OPENDOTA_URL + "matches/{}".format(match_id)
+    req = urllib.request.Request(url=request, headers=QUERY_HEADER)
+    while True:
+        try:
+            data = urllib.request.urlopen(req)
+            break
+        except:
+            logging.warning("Timeout, retrying in 60 seconds")
+            time.sleep(60)
+    json_data = json.loads(data.read())
+    return json_data
+
+
 def ret_kill_density(data, duration):
     match_data = data["data"]["match"]
     radiantKills = sum(match_data["radiantKills"])

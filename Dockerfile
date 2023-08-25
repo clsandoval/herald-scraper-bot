@@ -9,4 +9,4 @@ COPY env.py ./
 
 RUN pip install -r requirements.txt
 
-CMD ["python","bot.py"]
+CMD ["python","bot_nostratz.py"]
