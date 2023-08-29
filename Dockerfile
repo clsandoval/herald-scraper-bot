@@ -2,7 +2,7 @@ FROM python:latest
 
 WORKDIR /
 
-COPY bot.py ./
+COPY bot_nostratz.py ./
 COPY functions.py ./
 COPY requirements.txt ./
 COPY env.py ./

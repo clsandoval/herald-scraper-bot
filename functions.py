@@ -78,6 +78,15 @@ def get_match_data_nostratz(match_id):
     return json_data
 
 
+def ret_kill_density_nostratz(match_data):
+    duration, radiant_kills, dire_kills = (
+        match_data["duration"],
+        match_data["radiant_score"],
+        match_data["dire_score"],
+    )
+    return (radiant_kills + dire_kills) / (duration / 60)
+
+
 def ret_kill_density(data, duration):
     match_data = data["data"]["match"]
     radiantKills = sum(match_data["radiantKills"])
