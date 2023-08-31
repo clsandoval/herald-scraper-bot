@@ -131,8 +131,14 @@ def send_message(message):
     }
     with requests.Session() as s:
         s.keep_alive = False
-        response = s.request("POST", TG_URL, json=payload, headers=headers, timeout=5)
-        print("Telegram Message Status {}".format(response))
+        try:
+            response = s.request(
+                "POST", TG_URL, json=payload, headers=headers, timeout=5
+            )
+            print("Telegram Message Status {}".format(response))
+        except:
+            print("Telegram API Timeout")
+        time.sleep(0.5)
 
 
 def query_stratz(
