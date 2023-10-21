@@ -161,3 +161,11 @@ def query_stratz(
             time.sleep(1)
     data = json.loads(r.text)
     return data
+
+
+def get_max_hero_damange(match_data):
+    player_data = match_data["players"]
+    max_hero_damage = 0
+    for player in player_data:
+        max_hero_damage = max(max_hero_damage, player["hero_damage"])
+    return max_hero_damage
