@@ -19,7 +19,8 @@ dates = [
 # %%
 for match, duration, date in zip(matches, durations, dates):
     match_data = get_match_data_nostratz(match)
-    max_hero_damage = get_max_hero_damange(match_data)
+    max_hero_damage, hero_id = get_max_hero_damage(match_data)
+    hero_name = HERO_ID_TO_NAME[hero_id]
     kill_density = ret_kill_density_nostratz(match_data)
     players = get_match_data_nostratz(match)["players"]
     leaver = 0
@@ -27,8 +28,15 @@ for match, duration, date in zip(matches, durations, dates):
         if player["leaver_status"] != 0:
             leaver = 1
     if leaver == 0:
-        message = "{}\nMatch: opendota.com/matches/{}\nDuration: {}\nKill Density: {}\nMax Hero Damage: {}\n".format(
-            date, match, duration, kill_density, max_hero_damage
+        message = """
+        {}\nMatch: opendota.com/matches/{}\nDuration: {}\nKill Density: {}\nMax Hero Damage: {}\nHero: {}\n
+        """.format(
+            date,
+            match,
+            duration,
+            kill_density,
+            max_hero_damage,
+            hero_name,
         )
         send_message(message)
     time.sleep(0.5)
