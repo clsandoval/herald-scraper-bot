@@ -1,4 +1,4 @@
-import urllib
+import urllib, cv2, uuid
 import pypika
 import json
 import requests
@@ -7,6 +7,9 @@ import logging
 from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
+from linkpreview import link_preview
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 
 TG_URL = "https://api.telegram.org/bot1982794836%3AAAGupWyxWjOtOiObaM3atPty8hL7OArAv94/sendMessage"
@@ -299,3 +302,44 @@ def get_max_hero_damage(match_data):
             max_hero_damage = player["hero_damage"]
             hero_id = player["hero_id"]
     return max_hero_damage, hero_id
+
+
+def get_link_preview_image(image_url, filename):
+    preview = link_preview(image_url)
+    preview_url = preview.image
+
+    img_data = requests.get(preview_url).content
+    image_filename = filename
+    with open(filename, 'wb') as handler:
+        handler.write(img_data)
+
+    preview_image = cv2.imread(filename)
+    preview_image = cv2.resize(preview_image,(1200,600))
+    cv2.imwrite(filename, preview_image)
+    
+    return image_filename
+
+def overlay_medals_on_link_preview(match_data_url):
+    job_id = uuid.uuid4()
+
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    browser = webdriver.Chrome(options = chrome_options)
+
+    browser.set_window_size(3840,2160)
+    browser.get(match_data_url)
+    browser.save_screenshot(f'{job_id}_match_data.png')
+    browser.close()
+
+    # X crop from 1320 - 1884, 1930 - 2490
+    # Y crop from 700 - 740, 700-740
+    get_link_preview_image(match_data_url, f'{job_id}_link_preview.png')
+    match_data_image = cv2.imread(f'{job_id}_match_data.png')
+    link_preview_image = cv2.imread(f'{job_id}_link_preview.png')
+
+    left_medals_image = match_data_image[700:730, 1354:1854]
+    right_medals_image = match_data_image[700:730, 1960:2460]
+    link_preview_image[405:435, 35:535] = left_medals_image
+    link_preview_image[405:435, 665:1165] = right_medals_image
+
+    cv2.imwrite(f'{job_id}_link_medal_overlay.png', link_preview_image)
