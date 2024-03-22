@@ -29,7 +29,7 @@ for match, duration, date in zip(matches, durations, dates):
             leaver = 1
     if leaver == 0:
         message = """
-        {}\nMatch: opendota.com/matches/{}\nDuration: {}\nKill Density: {}\nMax Hero Damage: {}\nHero: {}\n
+        {}\nMatch: stratz.com/matches/{}\nDuration: {}\nKill Density: {}\nMax Hero Damage: {}\nHero: {}\n
         """.format(
             date,
             match,

@@ -233,7 +233,7 @@ def ret_kill_density(data, duration):
 def send_message(message):
     payload = {
         "text": message,
-        "disable_web_page_preview": False,
+        "disable_web_page_preview": True,
         "disable_notification": False,
         "chat_id": "1405224455",
     }
