@@ -4,6 +4,7 @@ import json
 import requests
 import time
 import logging
+import numpy as np
 from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
@@ -335,6 +336,15 @@ def overlay_medals_on_link_preview(match_data_url):
 
     left_medals_image = match_data_image[700:730, 1354:1854]
     right_medals_image = match_data_image[700:730, 1960:2460]
+
+    minimum_brightness = .66
+    cols, rows, _= left_medals_image.shape
+    brightness = np.sum(left_medals_image) / (255 * cols * rows)
+    
+    if brightness/minimum_brightness < 1:
+        left_medals_image = cv2.convertScaleAbs(left_medals_image, alpha = 1, beta = 0)
+        right_medals_image = cv2.convertScaleAbs(right_medals_image, alpha = 1, beta = 0)
+
     link_preview_image[405:435, 35:535] = left_medals_image
     link_preview_image[405:435, 665:1165] = right_medals_image
 

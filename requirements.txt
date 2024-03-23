@@ -4,3 +4,4 @@ pypika
 requests
 selenium
 linkpreview
+numpy
