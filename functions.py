@@ -293,27 +293,31 @@ def get_max_hero_damage(match_data):
 
 def get_link_preview_image(image_url, filename):
     url = image_url
-    grabber = LinkGrabber(
-        initial_timeout=20,
-        maxsize=1048576,
-        receive_timeout=10,
-        chunk_size=1024,
-    )
-    content, url = grabber.get_content(url)
-    link = Link(url, content)
-    preview = LinkPreview(link, parser="lxml")
-    #preview = link_preview(image_url)
-    preview_url = preview.image
-
-    img_data = requests.get(preview_url).content
     image_filename = filename
-    with open(filename, 'wb') as handler:
-        handler.write(img_data)
+    while True:
+        grabber = LinkGrabber(
+            initial_timeout=20,
+            maxsize=1048576,
+            receive_timeout=10,
+            chunk_size=1024,
+        )
+        content, url = grabber.get_content(url)
+        link = Link(url, content)
+        preview = LinkPreview(link, parser="lxml")
+        preview_url = preview.image
 
-    preview_image = cv2.imread(filename)
-    preview_image = cv2.resize(preview_image,(1200,600))
+        img_data = requests.get(preview_url).content
+        with open(filename, 'wb') as handler:
+            handler.write(img_data)
+
+        preview_image = cv2.imread(filename)
+        try:
+            preview_image = cv2.resize(preview_image,(1200,600))
+            break
+        except:
+            continue
+
     cv2.imwrite(filename, preview_image)
-    
     return image_filename
 
 def overlay_medals_on_link_preview(match_data_url):
