@@ -1,6 +1,7 @@
 # %%
 from functions import *
 import logging
+logging.getLogger().setLevel(logging.INFO)
 
 # %%
 logging.info("Start Herald Match Scraping")
@@ -15,6 +16,7 @@ dates = [
 # %%
 for match_id, duration, date in zip(matches, durations, dates):
     match_data = query_stratz(match_id)
+    print(match_data)
     total_kills, kill_density = ret_kill_density(match_data, duration)
     if kill_density != -1 and kill_density > 1.5:
         message = "{}\nMatch: opendota.com/matches/{}\nDuration: {}\nTotal Kills: {}\nKill Density: {}".format(

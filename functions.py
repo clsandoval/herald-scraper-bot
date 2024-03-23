@@ -7,7 +7,7 @@ import logging
 from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
-from linkpreview import link_preview
+from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
@@ -247,20 +247,6 @@ def send_message(message):
     }
     with requests.Session() as s:
         s.keep_alive = False
-        response = s.request("POST", TG_URL, json=payload, headers=headers, timeout=5)
-    payload = {
-        "text": message,
-        "disable_web_page_preview": False,
-        "disable_notification": False,
-        "chat_id": "1057769032",
-    }
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
-        "Content-Type": "application/json",
-    }
-    with requests.Session() as s:
-        s.keep_alive = False
         try:
             response = s.request(
                 "POST", TG_URL, json=payload, headers=headers, timeout=5
@@ -305,7 +291,17 @@ def get_max_hero_damage(match_data):
 
 
 def get_link_preview_image(image_url, filename):
-    preview = link_preview(image_url)
+    url = image_url
+    grabber = LinkGrabber(
+        initial_timeout=20,
+        maxsize=1048576,
+        receive_timeout=10,
+        chunk_size=1024,
+    )
+    content, url = grabber.get_content(url)
+    link = Link(url, content)
+    preview = LinkPreview(link, parser="lxml")
+    #preview = link_preview(image_url)
     preview_url = preview.image
 
     img_data = requests.get(preview_url).content
@@ -342,4 +338,7 @@ def overlay_medals_on_link_preview(match_data_url):
     link_preview_image[405:435, 35:535] = left_medals_image
     link_preview_image[405:435, 665:1165] = right_medals_image
 
-    cv2.imwrite(f'{job_id}_link_medal_overlay.png', link_preview_image)
+    cv2.imwrite( f'{job_id}_link_medal_overlay.png', link_preview_image)
+
+    return f'{job_id}_link_medal_overlay.png'
+
