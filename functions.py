@@ -321,7 +321,7 @@ def get_link_preview_image(image_url, filename):
     return image_filename
 
 def overlay_medals_on_link_preview(match_data_url):
-    job_id = uuid.uuid4()
+    job_id = match_data_url.split('/')[-1]
 
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -344,10 +344,11 @@ def overlay_medals_on_link_preview(match_data_url):
     minimum_brightness = .66
     cols, rows, _= left_medals_image.shape
     brightness = np.sum(left_medals_image) / (255 * cols * rows)
+    ratio = brightness/minimum_brightness
     
-    if brightness/minimum_brightness < 1:
-        left_medals_image = cv2.convertScaleAbs(left_medals_image, alpha = 1, beta = 0)
-        right_medals_image = cv2.convertScaleAbs(right_medals_image, alpha = 1, beta = 0)
+    if ratio < 1:
+        left_medals_image = cv2.convertScaleAbs(left_medals_image, alpha = 1/ratio, beta = 0)
+        right_medals_image = cv2.convertScaleAbs(right_medals_image, alpha = 1/ratio, beta = 0)
 
     link_preview_image[405:435, 35:535] = left_medals_image
     link_preview_image[405:435, 665:1165] = right_medals_image
