@@ -3,11 +3,13 @@ from functions import *
 import logging, time
 import telebot
 
-tb = telebot.TeleBot('1982794836:AAGupWyxWjOtOiObaM3atPty8hL7OArAv94')
+tb = telebot.TeleBot("1982794836:AAGupWyxWjOtOiObaM3atPty8hL7OArAv94")
 logging.getLogger().setLevel(logging.INFO)
+
 
 def handler(event, context):
     return event
+
 
 logging.info("Start Herald Match Scraping")
 json_data = query(days=1)
@@ -39,10 +41,10 @@ for match, duration, date in zip(matches, durations, dates):
             max_hero_damage,
             hero_name,
         )
-        #send_message(message)
-        medal_overlay_filepath = overlay_medals_on_link_preview(f'https://stratz.com/matches/{match}')
-        with open(medal_overlay_filepath, 'rb') as f:
-            tb.send_photo('1405224455', f, caption=message, parse_mode='HTML')
+        send_message(message)
+        # medal_overlay_filepath = overlay_medals_on_link_preview(f'https://stratz.com/matches/{match}')
+        # with open(medal_overlay_filepath, 'rb') as f:
+        #    tb.send_photo('1405224455', f, caption=message, parse_mode='HTML')
     time.sleep(1)
     logging.info("Scrape complete")
 

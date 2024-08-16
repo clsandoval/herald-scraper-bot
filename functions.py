@@ -11,6 +11,7 @@ from pypika import Query, Table
 from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 
 
 TG_URL = "https://api.telegram.org/bot1982794836%3AAAGupWyxWjOtOiObaM3atPty8hL7OArAv94/sendMessage"
@@ -295,65 +296,88 @@ def get_link_preview_image(image_url, filename):
     url = image_url
     image_filename = filename
     while True:
-        grabber = LinkGrabber(
-            initial_timeout=20,
-            maxsize=1048576,
-            receive_timeout=10,
-            chunk_size=1024,
-        )
-        content, url = grabber.get_content(url)
-        link = Link(url, content)
-        preview = LinkPreview(link, parser="lxml")
-        preview_url = preview.image
-
-        img_data = requests.get(preview_url).content
-        with open(filename, 'wb') as handler:
-            handler.write(img_data)
-
-        preview_image = cv2.imread(filename)
         try:
-            preview_image = cv2.resize(preview_image,(1200,600))
+            grabber = LinkGrabber(
+                initial_timeout=20,
+                maxsize=1048576,
+                receive_timeout=10,
+                chunk_size=1024,
+            )
+            content, url = grabber.get_content(url)
+            link = Link(url, content)
+            preview = LinkPreview(link, parser="lxml")
+            preview_url = preview.image
+
+            img_data = requests.get(preview_url).content
+            with open(filename, "wb") as handler:
+                handler.write(img_data)
+
+            preview_image = cv2.imread(filename)
+            preview_image = cv2.resize(preview_image, (1200, 600))
             break
         except:
+            logging.warning("Link grabbing failed, retrying in 5 seconds")
+            time.sleep(5)
             continue
 
     cv2.imwrite(filename, preview_image)
     return image_filename
 
+
 def overlay_medals_on_link_preview(match_data_url):
-    job_id = match_data_url.split('/')[-1]
+    job_id = match_data_url.split("/")[-1]
 
     chrome_options = Options()
     chrome_options.add_argument("--headless")
-    browser = webdriver.Chrome(options = chrome_options)
+    browser = webdriver.Chrome(options=chrome_options)
 
-    browser.set_window_size(3840,2160)
+    browser.set_window_size(3840, 2160)
     browser.get(match_data_url)
-    browser.save_screenshot(f'{job_id}_match_data.png')
+    time.sleep(1)  # let page load
+    browser.execute_script("document.body.style.zoom='150%'")
+    browser.save_screenshot(f"{job_id}_match_data.png")
     browser.close()
 
     # X crop from 1320 - 1884, 1930 - 2490
     # Y crop from 700 - 740, 700-740
-    get_link_preview_image(match_data_url, f'{job_id}_link_preview.png')
-    match_data_image = cv2.imread(f'{job_id}_match_data.png')
-    link_preview_image = cv2.imread(f'{job_id}_link_preview.png')
+    get_link_preview_image(match_data_url, f"{job_id}_link_preview.png")
+    match_data_image = cv2.imread(f"{job_id}_match_data.png")
+    link_preview_image = cv2.imread(f"{job_id}_link_preview.png")
 
     left_medals_image = match_data_image[700:730, 1354:1854]
     right_medals_image = match_data_image[700:730, 1960:2460]
 
-    minimum_brightness = .66
-    cols, rows, _= left_medals_image.shape
+    minimum_brightness = 0.66
+    cols, rows, _ = left_medals_image.shape
     brightness = np.sum(left_medals_image) / (255 * cols * rows)
-    ratio = brightness/minimum_brightness
-    
+    ratio = brightness / minimum_brightness
+
     if ratio < 1:
-        left_medals_image = cv2.convertScaleAbs(left_medals_image, alpha = 1/ratio, beta = 0)
-        right_medals_image = cv2.convertScaleAbs(right_medals_image, alpha = 1/ratio, beta = 0)
+        left_medals_image = cv2.convertScaleAbs(
+            left_medals_image, alpha=1 / ratio, beta=0
+        )
+        right_medals_image = cv2.convertScaleAbs(
+            right_medals_image, alpha=1 / ratio, beta=0
+        )
 
     link_preview_image[405:435, 35:535] = left_medals_image
     link_preview_image[405:435, 665:1165] = right_medals_image
 
-    cv2.imwrite( f'{job_id}_link_medal_overlay.png', link_preview_image)
+    cv2.imwrite(f"{job_id}_link_medal_overlay.png", link_preview_image)
 
-    return f'{job_id}_link_medal_overlay.png'
+    return f"{job_id}_link_medal_overlay.png"
 
+
+def overlay_medals_on_link_preview_exact(match_data_url):
+    job_id = match_data_url.split("/")[-1]
+
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    browser = webdriver.Chrome(options=chrome_options)
+
+    browser.set_window_size(3840, 2160)
+    browser.get(match_data_url)
+    time.sleep(1)  # let page load
+    s = browser.find_elements(By.XPATH, "//div[@data-heroid]")
+    links = [elem.get_attribute("href") for elem in s]
+    print(links)

@@ -1,6 +1,7 @@
 # %%
 from functions import *
 import logging
+
 logging.getLogger().setLevel(logging.INFO)
 
 # %%
@@ -19,7 +20,7 @@ for match_id, duration, date in zip(matches, durations, dates):
     print(match_data)
     total_kills, kill_density = ret_kill_density(match_data, duration)
     if kill_density != -1 and kill_density > 1.5:
-        message = "{}\nMatch: opendota.com/matches/{}\nDuration: {}\nTotal Kills: {}\nKill Density: {}".format(
+        message = "{}\nMatch: stratz.com/matches/{}\nDuration: {}\nTotal Kills: {}\nKill Density: {}".format(
             date, match_id, duration, total_kills, kill_density
         )
         send_message(message)
