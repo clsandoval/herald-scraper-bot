@@ -380,9 +380,3 @@ def create_heroes_string(stratz_data):
     dire = generate_team_table(dire_heroes, "Dire Team")
 
     return radiant, dire
-
-
-stratz_data = stratz_info(8041464715)
-radiant, dire = create_heroes_string(stratz_data["data"]["match"]["players"])
-print(radiant)
-print(dire)
