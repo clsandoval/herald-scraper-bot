@@ -56,7 +56,8 @@ STRATZ_INFO = """{{
       item5Id,
       behavior,
       heroDamage,
-      dotaPlusHeroXp
+      dotaPlusHeroXp,
+      isRadiant
     }}
   }}
 }}
@@ -173,7 +174,6 @@ def query_stratz(
         except:
             print("Stratz timeout, retrying in 1 second")
             time.sleep(1)
-    print(r.text)
     data = json.loads(r.text)
     return data
 
@@ -196,12 +196,8 @@ def stratz_info(
         except:
             print("Stratz timeout, retrying in 1 second")
             time.sleep(1)
-    print(r.text)
     data = json.loads(r.text)
     return data
-
-
-print(stratz_info(8040891002))
 
 
 def get_max_hero_damage(match_data):
@@ -306,44 +302,81 @@ def overlay_medals_on_link_preview_exact(match_data_url):
     print(links)
 
 
-stratz_players_data = stratz_info(8040891002)["data"]["match"]["players"]
-heroes = [
-    {
-        "name": HERO_ID_TO_NAME[x["heroId"]],
-        "position": x["position"],
-        "kills": x["kills"],
-        "deaths": x["deaths"],
-        "assists": x["assists"],
-        "damage_done": x["heroDamage"],
-        "dota_plus": x["dotaPlusHeroXp"],
-        "items": [
-            x["item0Id"],
-            x["item1Id"],
-            x["item2Id"],
-            x["item3Id"],
-            x["item4Id"],
-            x["item5Id"],
-        ],
-    }
-    for x in stratz_players_data
-]
-
-# Hero Details
-hero_details = "\n".join(
-    [
-        f"""
-    --------------------------------------
-    | Hero Name      : {hero['name']}
-    | Position       : {hero['position']}
-    | Kills          : {hero['kills']}
-    | Deaths         : {hero['deaths']}
-    | Assists        : {hero['assists']}
-    | Damage Done    : {hero['damage_done']:,}
-    | Dota Plus XP   : {hero['dota_plus']:,}
-    | Items          : {hero['items']}
-    --------------------------------------
-    """
-        for hero in heroes
+def create_heroes_string(stratz_data):
+    heroes = [
+        {
+            "name": HERO_ID_TO_NAME[x["heroId"]],
+            "position": x["position"],
+            "kills": x["kills"],
+            "deaths": x["deaths"],
+            "assists": x["assists"],
+            "damage_done": x["heroDamage"],
+            "dota_plus": x["dotaPlusHeroXp"],
+            "items": [
+                ITEM_MAP[str(x["item0Id"])],
+                ITEM_MAP[str(x["item1Id"])],
+                ITEM_MAP[str(x["item2Id"])],
+                ITEM_MAP[str(x["item3Id"])],
+                ITEM_MAP[str(x["item4Id"])],
+                ITEM_MAP[str(x["item5Id"])],
+            ],
+            "isRadiant": x["isRadiant"],
+        }
+        for x in stratz_data
     ]
-)
-print(hero_details)
+
+    radiant_heroes = [hero for hero in heroes if hero["isRadiant"]]
+    dire_heroes = [hero for hero in heroes if not hero["isRadiant"]]
+
+    # Function to generate rows for a team
+    def generate_team_table(team_heroes, team_name):
+        headers = [""] + [hero["name"] for hero in team_heroes]
+        max_items = max(len(hero["items"]) for hero in team_heroes)
+
+        # Attribute rows
+        rows = [
+            ["", *(hero["position"] for hero in team_heroes)],
+            ["Kills", *(hero["kills"] for hero in team_heroes)],
+            ["Deaths", *(hero["deaths"] for hero in team_heroes)],
+            ["Assists", *(hero["assists"] for hero in team_heroes)],
+            ["Damage Done", *(f"{hero['damage_done']:,}" for hero in team_heroes)],
+            ["Dota Plus XP", *(f"{hero['dota_plus']:,}" for hero in team_heroes)],
+        ]
+
+        # Item rows
+        for i in range(max_items):
+            rows.append(
+                [
+                    f"Item {i + 1}",
+                    *(
+                        hero["items"][i] if i < len(hero["items"]) else ""
+                        for hero in team_heroes
+                    ),
+                ]
+            )
+
+        # Build formatted table
+        col_width = 20
+        table_width = max(len(h) for h in headers) + col_width
+        format_row = "{:<20}" + " | ".join([f"{{:<{col_width}}}"] * len(team_heroes))
+
+        table = (
+            f"""
+        {team_name}
+        {'-' * (table_width + len(team_heroes) * col_width)}
+        {format_row.format(*headers)}
+        {'-' * (table_width + len(team_heroes) * col_width)}
+        """
+            + "\n".join(format_row.format(*row) for row in rows)
+            + f"""
+        {'-' * (table_width + len(team_heroes) * col_width)}
+        """
+        )
+
+        return table
+
+    # Generate and print tables for both teams
+    radiant = generate_team_table(radiant_heroes, "Radiant Team")
+    dire = generate_team_table(dire_heroes, "Dire Team")
+
+    return radiant, dire
