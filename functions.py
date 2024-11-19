@@ -334,11 +334,12 @@ def create_heroes_string(stratz_data):
     def generate_hero_table(team_heroes, team_name):
         tables = []
         for hero in team_heroes:
-            headers = ["Attribute", f"{hero['name']}"]
+            headers = []
             max_items = len(hero["items"])
 
             # Attribute rows for each hero
             rows = [
+                ["Position", hero["position"]],
                 ["Kills", hero["kills"]],
                 ["Deaths", hero["deaths"]],
                 ["Assists", hero["assists"]],
@@ -357,13 +358,13 @@ def create_heroes_string(stratz_data):
             # Table header
             table = f"""
 {team_name} - {hero['name']}
-{'-' * (col_width + len(headers[1]))}
+{'-' * (col_width )}
 {format_row.format(*headers)}
-{'-' * (col_width + len(headers[1]))}
+{'-' * (col_width )}
 """
             # Add the rows to the table
             table += "\n".join([format_row.format(*row) for row in rows])
-            table += f"\n{'-' * (col_width + len(headers[1]))}"
+            table += f"\n{'-' * (col_width )}"
 
             # Add this table to the list of tables
             tables.append(table)
