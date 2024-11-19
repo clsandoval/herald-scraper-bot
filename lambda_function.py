@@ -32,15 +32,61 @@ for match, duration, date in zip(matches, durations, dates):
         if player["leaver_status"] != 0:
             leaver = 1
     if leaver == 0:
-        message = """
-        stratz.com/matches/{}\nDuration: {}\nKill Density: {}\nMax Hero Damage: {}\nHero: {}\n
-        """.format(
-            match,
-            duration,
-            kill_density,
-            max_hero_damage,
-            hero_name,
+        # get granular list of player data from stratz
+        stratz_players_data = stratz_info(match)["data"]["match"]["players"]
+        heroes = [
+            {
+                "name": HERO_ID_TO_NAME[x["heroId"]],
+                "position": x["position"],
+                "kills": x["kills"],
+                "deaths": x["deaths"],
+                "assists": x["assists"],
+                "damage_done": x["heroDamage"],
+                "dota_plus": x["dotaPlusHeroXp"],
+                "items": [
+                    x["item0Id"],
+                    x["item1Id"],
+                    x["item2Id"],
+                    x["item3Id"],
+                    x["item4Id"],
+                    x["item5Id"],
+                ],
+            }
+            for x in stratz_players_data
+        ]
+
+        match_summary = f"""
+        --------------------------------------
+        | Match ID   : {match}
+        | Date       : {date}
+        | Duration   : {duration/60} minutes
+        | KD         : {kill_density}
+        | URL        : stratz.com/matches/{match}
+        --------------------------------------
+        """
+
+        # Hero Details
+        hero_details = "\n".join(
+            [
+                f"""
+            --------------------------------------
+            | Hero Name      : {hero['name']}
+            | Position       : {hero['position']}
+            | Kills          : {hero['kills']}
+            | Deaths         : {hero['deaths']}
+            | Assists        : {hero['assists']}
+            | Damage Done    : {hero['damage_done']:,}
+            | Dota Plus XP   : {hero['dotaPlusHeroXp']:,}
+            | Items          : {", ".join(hero['items'])}
+            --------------------------------------
+            """
+                for hero in heroes
+            ]
         )
+
+        # Combine and print
+        message = match_summary + hero_details
+        print(message)
         send_message(message)
         # medal_overlay_filepath = overlay_medals_on_link_preview(f'https://stratz.com/matches/{match}')
         # with open(medal_overlay_filepath, 'rb') as f:
