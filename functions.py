@@ -306,19 +306,19 @@ def create_heroes_string(stratz_data):
     heroes = [
         {
             "name": HERO_ID_TO_NAME[x["heroId"]],
-            "position": x["position"],
+            "position": x["position"] if x["position"] else "Not Provided",
             "kills": x["kills"],
             "deaths": x["deaths"],
             "assists": x["assists"],
             "damage_done": x["heroDamage"],
-            "dota_plus": x["dotaPlusHeroXp"],
+            "dota_plus": x["dotaPlusHeroXp"] if x["dotaPlusHeroXp"] else -1,
             "items": [
-                ITEM_MAP[str(x["item0Id"])],
-                ITEM_MAP[str(x["item1Id"])],
-                ITEM_MAP[str(x["item2Id"])],
-                ITEM_MAP[str(x["item3Id"])],
-                ITEM_MAP[str(x["item4Id"])],
-                ITEM_MAP[str(x["item5Id"])],
+                ITEM_MAP.get(str(x["item0Id"]), ""),
+                ITEM_MAP.get(str(x["item1Id"]), ""),
+                ITEM_MAP.get(str(x["item2Id"]), ""),
+                ITEM_MAP.get(str(x["item3Id"]), ""),
+                ITEM_MAP.get(str(x["item4Id"]), ""),
+                ITEM_MAP.get(str(x["item5Id"]), ""),
             ],
             "isRadiant": x["isRadiant"],
         }
@@ -380,3 +380,9 @@ def create_heroes_string(stratz_data):
     dire = generate_team_table(dire_heroes, "Dire Team")
 
     return radiant, dire
+
+
+stratz_data = stratz_info(8041464715)
+radiant, dire = create_heroes_string(stratz_data["data"]["match"]["players"])
+print(radiant)
+print(dire)
