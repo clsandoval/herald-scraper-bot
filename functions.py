@@ -359,8 +359,6 @@ def create_heroes_string(stratz_data):
             table = f"""
 {team_name} - {hero['name']}
 {'-' * (col_width )}
-{format_row.format(*headers)}
-{'-' * (col_width )}
 """
             # Add the rows to the table
             table += "\n".join([format_row.format(*row) for row in rows])
@@ -372,6 +370,11 @@ def create_heroes_string(stratz_data):
         return "\n\n".join(tables)
 
     # Generate and print tables for both teams
-    radiant = generate_hero_table(radiant_heroes, "Radiant Team")
-    dire = generate_hero_table(dire_heroes, "Dire Team")
+    radiant = generate_hero_table(radiant_heroes, "Radiant")
+    dire = generate_hero_table(dire_heroes, "Dire")
     return radiant, dire
+
+
+stratz_data = stratz_info(8032337000)
+radiant, dire = create_heroes_string(stratz_data["data"]["match"]["players"])
+print(radiant)
