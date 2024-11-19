@@ -17,8 +17,7 @@ logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
 dates = [
-    datetime.utcfromtimestamp(int(
-        i["start_time"])).strftime("%Y-%m-%d %H:%M:%S")
+    datetime.utcfromtimestamp(int(i["start_time"])).strftime("%Y-%m-%d %H:%M:%S")
     for i in json_data["rows"]
 ]
 # %%
@@ -46,8 +45,9 @@ for match, duration, date in zip(matches, durations, dates):
         """
         radiant, dire = create_heroes_string(stratz_players_data)
 
-        message = f"{match_summary}\n{radiant}\n{dire}"
-        send_message(message)
+        send_message(f"```{match_summary}```")
+        send_message(f"```{radiant}```")
+        send_message(f"```{dire}```")
 
     time.sleep(1)
     logging.info("Scrape complete")

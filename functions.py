@@ -138,12 +138,14 @@ def send_message(message):
         "disable_web_page_preview": True,
         "disable_notification": False,
         "chat_id": "1405224455",
+        "parse_mode": "MarkdownV2",
     }
     headers = {
         "Accept": "application/json",
         "User-Agent": "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
         "Content-Type": "application/json",
     }
+
     with requests.Session() as s:
         s.keep_alive = False
         try:
@@ -328,55 +330,47 @@ def create_heroes_string(stratz_data):
     radiant_heroes = [hero for hero in heroes if hero["isRadiant"]]
     dire_heroes = [hero for hero in heroes if not hero["isRadiant"]]
 
-    # Function to generate rows for a team
-    def generate_team_table(team_heroes, team_name):
-        headers = [""] + [hero["name"] for hero in team_heroes]
-        max_items = max(len(hero["items"]) for hero in team_heroes)
+    # Function to generate a table for each hero
+    def generate_hero_table(team_heroes, team_name):
+        tables = []
+        for hero in team_heroes:
+            headers = ["Attribute", f"{hero['name']}"]
+            max_items = len(hero["items"])
 
-        # Attribute rows
-        rows = [
-            ["", *(hero["position"] for hero in team_heroes)],
-            ["Kills", *(hero["kills"] for hero in team_heroes)],
-            ["Deaths", *(hero["deaths"] for hero in team_heroes)],
-            ["Assists", *(hero["assists"] for hero in team_heroes)],
-            ["Damage Done", *(f"{hero['damage_done']:,}" for hero in team_heroes)],
-            ["Dota Plus XP", *(f"{hero['dota_plus']:,}" for hero in team_heroes)],
-        ]
+            # Attribute rows for each hero
+            rows = [
+                ["Kills", hero["kills"]],
+                ["Deaths", hero["deaths"]],
+                ["Assists", hero["assists"]],
+                ["Damage Done", f"{hero['damage_done']:,}"],
+                ["Dota Plus XP", f"{hero['dota_plus']:,}"],
+            ]
 
-        # Item rows
-        for i in range(max_items):
-            rows.append(
-                [
-                    f"Item {i + 1}",
-                    *(
-                        hero["items"][i] if i < len(hero["items"]) else ""
-                        for hero in team_heroes
-                    ),
-                ]
-            )
+            # Item rows for each hero
+            for i in range(max_items):
+                rows.append([f"Item {i + 1}", hero["items"][i]])
 
-        # Build formatted table
-        col_width = 20
-        table_width = max(len(h) for h in headers) + col_width
-        format_row = "{:<20}" + " | ".join([f"{{:<{col_width}}}"] * len(team_heroes))
+            # Build formatted table for this hero
+            col_width = 20
+            format_row = "{:<20} | {:<" + f"{col_width}" + "}"
 
-        table = (
-            f"""
-        {team_name}
-        {'-' * (table_width + len(team_heroes) * col_width)}
-        {format_row.format(*headers)}
-        {'-' * (table_width + len(team_heroes) * col_width)}
-        """
-            + "\n".join(format_row.format(*row) for row in rows)
-            + f"""
-        {'-' * (table_width + len(team_heroes) * col_width)}
-        """
-        )
+            # Table header
+            table = f"""
+{team_name} - {hero['name']}
+{'-' * (col_width + len(headers[1]))}
+{format_row.format(*headers)}
+{'-' * (col_width + len(headers[1]))}
+"""
+            # Add the rows to the table
+            table += "\n".join([format_row.format(*row) for row in rows])
+            table += f"\n{'-' * (col_width + len(headers[1]))}"
 
-        return table
+            # Add this table to the list of tables
+            tables.append(table)
+
+        return "\n\n".join(tables)
 
     # Generate and print tables for both teams
-    radiant = generate_team_table(radiant_heroes, "Radiant Team")
-    dire = generate_team_table(dire_heroes, "Dire Team")
-
+    radiant = generate_hero_table(radiant_heroes, "Radiant Team")
+    dire = generate_hero_table(dire_heroes, "Dire Team")
     return radiant, dire
