@@ -5,7 +5,7 @@ import requests
 import time
 import logging
 import numpy as np
-from env import STRATZ_API_TOKEN
+#from env import STRATZ_API_TOKEN
 from datetime import datetime, timedelta
 from pypika import Query, Table
 from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
@@ -13,19 +13,24 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-
 TG_URL = "https://api.telegram.org/bot1982794836%3AAAGupWyxWjOtOiObaM3atPty8hL7OArAv94/sendMessage"
 STRATZ_GRAPHQL_URL = "https://api.stratz.com/graphql"
 OPENDOTA_URL = "https://api.opendota.com/api/"
 QUERY_HEADER = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
+    "User-Agent":
+    "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.11 (KHTML, like Gecko) "
     "Chrome/23.0.1271.64 Safari/537.11",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Charset": "ISO-8859-1,utf-8;q=0.7,*;q=0.3",
-    "Accept-Encoding": "none",
-    "Accept-Language": "en-US,en;q=0.8",
-    "Connection": "keep-alive",
+    "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Charset":
+    "ISO-8859-1,utf-8;q=0.7,*;q=0.3",
+    "Accept-Encoding":
+    "none",
+    "Accept-Language":
+    "en-US,en;q=0.8",
+    "Connection":
+    "keep-alive",
 }
 STRATZ_QUERY = """{{
   match(id:{}) {{
@@ -164,6 +169,8 @@ HERO_ID_TO_NAME = {
     136: "marci",
     137: "primal_beast",
     138: "muerta",
+    139: "ringmaster",
+    140: "kez"
 }
 
 
@@ -171,18 +178,14 @@ def query(url=OPENDOTA_URL, days=1):
     public_matches = Table("public_matches")
     d_t = (datetime.now() - timedelta(days=days)).timestamp()
     base_sql = "explorer?sql="
-    q = (
-        Query.from_(public_matches)
-        .select(
-            public_matches.match_id,
-            public_matches.start_time,
-            public_matches.avg_rank_tier,
-            public_matches.duration,
-        )
-        .where(public_matches.start_time >= d_t)
-        .where(public_matches.avg_rank_tier <= 16)
-        .where(public_matches.duration > 4500)
-    )
+    q = (Query.from_(public_matches).select(
+        public_matches.match_id,
+        public_matches.start_time,
+        public_matches.avg_rank_tier,
+        public_matches.duration,
+    ).where(public_matches.start_time >= d_t).where(
+        public_matches.avg_rank_tier <= 16).where(
+            public_matches.duration > 4500))
     request = url + base_sql + urllib.parse.quote(str(q))
     req = urllib.request.Request(url=request, headers=QUERY_HEADER)
     while True:
@@ -226,11 +229,9 @@ def ret_kill_density(data, duration):
     totalKills = radiantKills + direKills
     kill_density = totalKills / (duration / 60)
     for status in match_data["players"]:
-        if (
-            status["leaverStatus"] == "DISCONNECTED_TOO_LONG"
-            or status["leaverStatus"] == "ABANDONED"
-            or status["leaverStatus"] == "AFK"
-        ):
+        if (status["leaverStatus"] == "DISCONNECTED_TOO_LONG"
+                or status["leaverStatus"] == "ABANDONED"
+                or status["leaverStatus"] == "AFK"):
             return -1, -1
     return totalKills, kill_density
 
@@ -244,15 +245,18 @@ def send_message(message):
     }
     headers = {
         "Accept": "application/json",
-        "User-Agent": "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
+        "User-Agent":
+        "Telegram Bot SDK - (https://github.com/irazasyed/telegram-bot-sdk)",
         "Content-Type": "application/json",
     }
     with requests.Session() as s:
         s.keep_alive = False
         try:
-            response = s.request(
-                "POST", TG_URL, json=payload, headers=headers, timeout=5
-            )
+            response = s.request("POST",
+                                 TG_URL,
+                                 json=payload,
+                                 headers=headers,
+                                 timeout=5)
             print("Telegram Message Status {}".format(response))
         except:
             print("Telegram API Timeout")
@@ -263,7 +267,7 @@ def query_stratz(
     match,
     url=STRATZ_GRAPHQL_URL,
     stratz_query=STRATZ_QUERY,
-    api_token=STRATZ_API_TOKEN,
+    api_token="",
 ):
     headers = {"Authorization": f"Bearer {api_token}"}
     url = url
@@ -272,7 +276,9 @@ def query_stratz(
     stratz_query = stratz_query.replace("}}", "}")
     while True:
         try:
-            r = requests.post(url, json={"query": stratz_query}, headers=headers)
+            r = requests.post(url,
+                              json={"query": stratz_query},
+                              headers=headers)
             break
         except:
             print("Stratz timeout, retrying in 1 second")
@@ -353,12 +359,12 @@ def overlay_medals_on_link_preview(match_data_url):
     ratio = brightness / minimum_brightness
 
     if ratio < 1:
-        left_medals_image = cv2.convertScaleAbs(
-            left_medals_image, alpha=1 / ratio, beta=0
-        )
-        right_medals_image = cv2.convertScaleAbs(
-            right_medals_image, alpha=1 / ratio, beta=0
-        )
+        left_medals_image = cv2.convertScaleAbs(left_medals_image,
+                                                alpha=1 / ratio,
+                                                beta=0)
+        right_medals_image = cv2.convertScaleAbs(right_medals_image,
+                                                 alpha=1 / ratio,
+                                                 beta=0)
 
     link_preview_image[405:435, 35:535] = left_medals_image
     link_preview_image[405:435, 665:1165] = right_medals_image

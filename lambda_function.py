@@ -17,14 +17,15 @@ logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
 dates = [
-    datetime.utcfromtimestamp(int(i["start_time"])).strftime("%Y-%m-%d %H:%M:%S")
+    datetime.utcfromtimestamp(int(
+        i["start_time"])).strftime("%Y-%m-%d %H:%M:%S")
     for i in json_data["rows"]
 ]
 # %%
 for match, duration, date in zip(matches, durations, dates):
     match_data = get_match_data_nostratz(match)
     max_hero_damage, hero_id = get_max_hero_damage(match_data)
-    hero_name = HERO_ID_TO_NAME[hero_id]
+    hero_name = HERO_ID_TO_NAME.get(hero_id, "Unknown")
     kill_density = ret_kill_density_nostratz(match_data)
     players = get_match_data_nostratz(match)["players"]
     leaver = 0
