@@ -66,7 +66,7 @@ STRATZ_INFO = """{{
 def query(url=OPENDOTA_URL, days_back=2, day_period=1):
     public_matches = Table("public_matches")
     day_end = (datetime.now() - timedelta(days=days_back)).timestamp()
-    day_start = (datetime.now() - timedelta(days=days_back - day_period)).timestamp()
+    day_start = (datetime.now() - timedelta(days=days_back + day_period)).timestamp()
     base_sql = "explorer?sql="
     q = (
         Query.from_(public_matches)
