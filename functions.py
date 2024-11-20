@@ -56,6 +56,9 @@ STRATZ_INFO = """{{
       behavior,
       heroDamage,
       dotaPlusHeroXp,
+      dotaPlus{{
+        level
+      }}
       isRadiant
     }}
   }}
@@ -314,7 +317,7 @@ def create_heroes_string(stratz_data):
             "deaths": x["deaths"],
             "assists": x["assists"],
             "damage_done": x["heroDamage"],
-            "dota_plus": x["dotaPlusHeroXp"] if x["dotaPlusHeroXp"] else -1,
+            "dota_plus": x["dotaPlus"],
             "items": [
                 ITEM_MAP.get(str(x["item0Id"]), ""),
                 ITEM_MAP.get(str(x["item1Id"]), ""),
@@ -335,16 +338,16 @@ def create_heroes_string(stratz_data):
     def generate_hero_table(team_heroes, team_name):
         tables = []
         for hero in team_heroes:
-            headers = []
-            max_items = len(hero["items"])
-
+            dota_plus_level = -1
+            if hero["dota_plus"] is not None:
+                dota_plus_level = hero["dota_plus"].get("level", -1)
             # Attribute rows for each hero
             kills, deaths, assists = hero["kills"], hero["deaths"], hero["assists"]
             rows = [
                 ["Position", hero["position"]],
                 ["K/D/A", f"{kills}/{deaths}/{assists}"],
                 ["Damage Done", f"{hero['damage_done']:,}"],
-                ["Dota Plus XP", f"{hero['dota_plus']:,}"],
+                ["Dota Plus Level", f"{dota_plus_level:,}"],
             ]
 
             # Two item rows, three items each

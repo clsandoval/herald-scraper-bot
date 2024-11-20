@@ -44,8 +44,7 @@ for match, duration, date in zip(matches, durations, dates):
 --------------------------------------
 """
         radiant, dire = create_heroes_string(stratz_players_data)
-
-        send_message(f"{match_summary}")
+        send_message(f"```{match_summary}```")
         send_message(f"```{radiant}```")
         send_message(f"```{dire}```")
 
