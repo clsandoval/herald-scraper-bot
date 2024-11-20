@@ -339,16 +339,19 @@ def create_heroes_string(stratz_data):
             max_items = len(hero["items"])
 
             # Attribute rows for each hero
+            kills, deaths, assists = hero["kills"], hero["deaths"], hero["assists"]
             rows = [
                 ["Position", hero["position"]],
-                ["K/D/A", hero["kills"], hero["deaths"], hero["assists"]],
+                ["K/D/A", f"{kills}/{deaths}/{assists}"],
                 ["Damage Done", f"{hero['damage_done']:,}"],
                 ["Dota Plus XP", f"{hero['dota_plus']:,}"],
             ]
 
-            # Item rows for each hero
-            for i in range(max_items):
-                rows.append([f"Item {i + 1}", hero["items"][i]])
+            # Two item rows, three items each
+            item1, item2, item3 = hero["items"][0], hero["items"][1], hero["items"][2]
+            item4, item5, item6 = hero["items"][3], hero["items"][4], hero["items"][5]
+            item_row_1 = f"{item1}, {item2}, {item3}"
+            item_row_2 = f"{item4}, {item5}, {item6}"
 
             # Build formatted table for this hero
             col_width = 20
@@ -361,6 +364,8 @@ def create_heroes_string(stratz_data):
 """
             # Add the rows to the table
             table += "\n".join([format_row.format(*row) for row in rows])
+            table += f"\n{item_row_1}"
+            table += f"\n{item_row_2}"
             table += f"\n{'-' * (col_width )}"
 
             # Add this table to the list of tables
