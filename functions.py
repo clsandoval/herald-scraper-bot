@@ -47,15 +47,16 @@ STRATZ_INFO = """{{
     deaths,
     assists,
     position,
+    steamAccount{{
+      seasonRank
+    }}
       item0Id,
       item1Id,
       item2Id,
       item3Id,
       item4Id,
       item5Id,
-      behavior,
       heroDamage,
-      dotaPlusHeroXp,
       dotaPlus{{
         level
       }}
@@ -318,6 +319,7 @@ def create_heroes_string(stratz_data):
             "assists": x["assists"],
             "damage_done": x["heroDamage"],
             "dota_plus": x["dotaPlus"],
+            "rank": (x["steamAccount"]["seasonRank"]),
             "items": [
                 ITEM_MAP.get(str(x["item0Id"]), ""),
                 ITEM_MAP.get(str(x["item1Id"]), ""),
@@ -344,6 +346,7 @@ def create_heroes_string(stratz_data):
             # Attribute rows for each hero
             kills, deaths, assists = hero["kills"], hero["deaths"], hero["assists"]
             rows = [
+                ["Rank", RANK_MAP.get(hero["rank"], "No Medal")],
                 ["Position", hero["position"]],
                 ["K/D/A", f"{kills}/{deaths}/{assists}"],
                 ["Damage Done", f"{hero['damage_done']:,}"],
@@ -369,14 +372,21 @@ def create_heroes_string(stratz_data):
             table += "\n".join([format_row.format(*row) for row in rows])
             table += f"\n{item_row_1}"
             table += f"\n{item_row_2}"
-            table += f"\n{'-' * (col_width )}"
 
             # Add this table to the list of tables
             tables.append(table)
 
-        return "\n\n".join(tables)
+        return "\n".join(tables)
 
     # Generate and print tables for both teams
     radiant = generate_hero_table(radiant_heroes, "Radiant")
     dire = generate_hero_table(dire_heroes, "Dire")
     return radiant, dire
+
+
+def check_for_guardian(stratz_data):
+    for x in stratz_data:
+        rank = x["steamAccount"]["seasonRank"] or 0
+        if rank > 15:
+            return True
+    return False

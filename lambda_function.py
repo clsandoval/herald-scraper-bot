@@ -34,6 +34,9 @@ for match, duration, date in zip(matches, durations, dates):
     if leaver == 0:
         # get granular list of player data from stratz
         stratz_players_data = stratz_info(match)["data"]["match"]["players"]
+        if check_for_guardian(stratz_players_data):
+            continue
+
         match_summary = f"""
 --------------------------------------
 | Match ID   : {match}

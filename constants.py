@@ -635,3 +635,12 @@ ITEM_MAP = {
     "4301": "ofrenda_shovel",
     "4302": "ofrenda_pledge",
 }
+
+
+RANK_MAP = {
+    11: "Herald [1]",
+    12: "Herald [2]",
+    13: "Herald [3]",
+    14: "Herald [4]",
+    15: "Herald [5]",
+}
