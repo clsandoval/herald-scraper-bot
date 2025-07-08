@@ -12,7 +12,7 @@ def handler(event, context):
 
 
 logging.info("Start Herald Match Scraping")
-json_data = query()
+json_data = query(days_back=1)
 logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
