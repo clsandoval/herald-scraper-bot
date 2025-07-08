@@ -6,7 +6,7 @@ import time
 import logging
 import numpy as np
 from constants import *
-from env import STRATZ_API_TOKEN
+from env import STRATZ_API_TOKEN, OPENAI_API_KEY
 from datetime import datetime, timedelta
 from pypika import Query, Table
 from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
@@ -27,16 +27,45 @@ QUERY_HEADER = {
     "Accept-Language": "en-US,en;q=0.8",
     "Connection": "keep-alive",
 }
-STRATZ_QUERY = """{{
-  match(id:{}) {{
-  	radiantKills
-    direKills
-    durationSeconds
-    players{{
-      leaverStatus
-    }}
-  }}
-}}
+STRATZ_QUERY = """{
+  match(id: MATCH_ID) {
+    predictedWinRates
+    winRates
+    players {
+      heroId
+      kills
+      deaths
+      assists
+      position
+      steamAccount {
+        seasonRank
+      }
+      playbackData {
+        purchaseEvents {
+          time
+          itemId
+        }
+        abilityLearnEvents {
+          time
+          abilityId
+          level
+        }
+      }
+      level
+      item0Id
+      item1Id
+      item2Id
+      item3Id
+      item4Id
+      item5Id
+      heroDamage
+      dotaPlus {
+        level
+      }
+      isRadiant
+    }
+  }
+}
 """
 
 STRATZ_INFO = """{{
@@ -169,11 +198,8 @@ def query_stratz(
     stratz_query=STRATZ_QUERY,
     api_token=STRATZ_API_TOKEN,
 ):
-    headers = {"Authorization": f"Bearer {api_token}"}
-    url = url
-    stratz_query = stratz_query.format(match)
-    stratz_query = stratz_query.replace("{{", "{")
-    stratz_query = stratz_query.replace("}}", "}")
+    headers = {"Authorization": f"Bearer {api_token}", "User-Agent": "STRATZ_API"}
+    stratz_query = stratz_query.replace("MATCH_ID", str(match))
     while True:
         try:
             r = requests.post(url, json={"query": stratz_query}, headers=headers)
@@ -390,3 +416,171 @@ def check_for_guardian(stratz_data):
         if rank > 15:
             return True
     return False
+
+
+def format_match_data(match_data):
+    """
+    Format match data with proper labels using hero and item names
+    """
+
+    def get_hero_name(hero_id):
+        return HEROES.get(hero_id, f"Unknown Hero {hero_id}")
+
+    def get_item_name(item_id):
+        if item_id is None:
+            return "Empty"
+        return ITEMS.get(item_id, f"Unknown Item {item_id}")
+
+    def get_ability_name(ability_id):
+        return ability_ids.get(str(ability_id), f"Unknown Ability {ability_id}")
+
+    def format_position(position):
+        position_map = {
+            "POSITION_1": "Carry",
+            "POSITION_2": "Mid",
+            "POSITION_3": "Offlaner",
+            "POSITION_4": "Soft Support",
+            "POSITION_5": "Hard Support",
+        }
+        return position_map.get(position, position)
+
+    match = match_data["data"]["match"]
+
+    # Header
+    result = "=== DOTA 2 MATCH ANALYSIS ===\n\n"
+
+    # Win rates overview
+    result += "WIN RATES:\n"
+    result += (
+        f"Predicted Win Rates: {match['predictedWinRates'][:5]}... (first 5 values)\n"
+    )
+    result += f"Actual Win Rates: {match['winRates'][:5]}... (first 5 values)\n\n"
+
+    # Teams
+    radiant_players = [p for p in match["players"] if p["isRadiant"]]
+    dire_players = [p for p in match["players"] if not p["isRadiant"]]
+
+    # Format team
+    def format_team(players, team_name):
+        team_result = f"{team_name} TEAM:\n"
+        team_result += "=" * 50 + "\n"
+
+        for player in players:
+            hero_name = get_hero_name(player["heroId"])
+            position = format_position(player["position"])
+
+            # Basic stats
+            team_result += f"\n{hero_name} ({position})\n"
+            team_result += (
+                f"  KDA: {player['kills']}/{player['deaths']}/{player['assists']}\n"
+            )
+            team_result += f"  Level: {player['level']}\n"
+            team_result += f"  Hero Damage: {player['heroDamage']:,}\n"
+
+            # Rank
+            if player["steamAccount"] and player["steamAccount"]["seasonRank"]:
+                rank = player["steamAccount"]["seasonRank"]
+                team_result += f"  Rank: {rank}\n"
+
+            # Items
+            items = [
+                get_item_name(player.get("item0Id")),
+                get_item_name(player.get("item1Id")),
+                get_item_name(player.get("item2Id")),
+                get_item_name(player.get("item3Id")),
+                get_item_name(player.get("item4Id")),
+                get_item_name(player.get("item5Id")),
+            ]
+            team_result += f"  Items: {' | '.join(items)}\n"
+
+            # Sample of purchase events (first 5)
+            if "playbackData" in player and "purchaseEvents" in player["playbackData"]:
+                purchases = player["playbackData"]["purchaseEvents"]
+                team_result += f"  All Purchases:\n"
+                for purchase in purchases:
+                    time_min = purchase["time"] // 60
+                    time_sec = purchase["time"] % 60
+                    item_name = get_item_name(purchase["itemId"])
+                    team_result += f"    {time_min:02d}:{time_sec:02d} - {item_name}\n"
+
+            # Sample of ability events (first 5)
+            if (
+                "playbackData" in player
+                and "abilityLearnEvents" in player["playbackData"]
+            ):
+                abilities = player["playbackData"]["abilityLearnEvents"]
+                team_result += f"  All Abilities:\n"
+                for ability in abilities:
+                    time_min = ability["time"] // 60
+                    time_sec = ability["time"] % 60
+                    ability_name = get_ability_name(ability["abilityId"])
+                    team_result += f"    {time_min:02d}:{time_sec:02d} - {ability_name} (Level {ability['level']})\n"
+
+            team_result += "\n"
+
+        return team_result
+
+    # Add both teams
+    result += format_team(radiant_players, "RADIANT")
+    result += "\n"
+    result += format_team(dire_players, "DIRE")
+
+    return result
+
+
+def get_llm_summary(match_data):
+    """
+    Send formatted match data to LLM for witty analysis
+    """
+
+    prompt = f"""You are an observant Dota 2 analyst, and you've just reviewed a full Herald-tier match. Your job is to summarize the funniest, weirdest, or most questionable moments in a short, straight to the point no fluff paragraph.
+
+Here is the match data (structured JSON):
+
+{match_data}
+
+Write a short match summary focused on:
+- Any player doing something extremely dumb or weird (like no boots, multiple Rapiers, skipping ultimate, dying to neutrals, etc.)
+- Strange item builds or skill orders
+- Very high or low kills/deaths/assists
+- Excessive pings, tips, or chat messages
+- Abnormal gold/xp swings, throws, or comebacks
+- Someone carrying the game solo or feeding nonstop
+- Anything that looks like a throw, clown fiesta, or clearly Herald behavior
+
+
+Example output:
+- Juggernaut bought 3 Phase Boots, sold none.
+- Crystal Maiden had 0 boots at 43:12, rushed Dagon 3.
+- Viper skipped ult until level 16.
+- Shadow Fiend went 1–21–3, died 5 times to neutrals.
+- Dire led by 19k gold at 48 min, then fed 5-man wipe and lost.
+- Pudge leveled Flesh Heap first, maxed it before hook.
+- Radiant had no neutral items until 30 min.
+- Zeus pinged enemy jungle 47 times in 60 seconds.
+- No wards placed by either team after 25 min.
+- Invoker disconnected at minute 4, reconnected at minute 38.
+
+
+Now, based on the data above, write your own summary:"""
+
+    # Using OpenAI API - you'll need to set your API key
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Set your OpenAI API key here or via environment variable
+        # openai.api_key = "your-api-key-here"
+
+        response = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except ImportError:
+        return "OpenAI library not installed. Run: pip install openai"
+    except Exception as e:
+        return f"Error calling LLM: {str(e)}"

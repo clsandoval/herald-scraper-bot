@@ -647,3 +647,7 @@ RANK_MAP = {
     14: "Herald [4]",
     15: "Herald [5]",
 }
+
+# Aliases for easier importing
+HEROES = HERO_ID_TO_NAME
+ITEMS = ITEM_MAP

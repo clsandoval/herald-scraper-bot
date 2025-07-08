@@ -27,6 +27,9 @@ for match, duration, date in zip(matches, durations, dates):
     hero_name = HERO_ID_TO_NAME.get(hero_id, "Unknown")
     kill_density = ret_kill_density_nostratz(match_data)
     players = get_match_data_nostratz(match)["players"]
+    stratz_response = query_stratz(match)
+    formatted_output = format_match_data(stratz_response)
+    llm_summary = get_llm_summary(formatted_output)
     leaver = 0
     for player in players:
         if player["leaver_status"] != 0:
@@ -50,6 +53,7 @@ for match, duration, date in zip(matches, durations, dates):
         send_message(f"```{match_summary}```")
         send_message(f"```{radiant}```")
         send_message(f"```{dire}```")
+        send_message(f"```{llm_summary}```")
 
     time.sleep(1)
     logging.info("Scrape complete")
