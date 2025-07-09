@@ -69,8 +69,8 @@ def main():
 """
                     radiant, dire = create_heroes_string(stratz_players_data)
                     send_message(f"```{match_summary}```")
-                    send_message(f"```{radiant}```")
-                    send_message(f"```{dire}```")
+                    # send_message(f"```{radiant}```")
+                    # send_message(f"```{dire}```")
                     send_message(f"```{llm_summary}```")
 
                     logger.info(f"Processed match {match}")
