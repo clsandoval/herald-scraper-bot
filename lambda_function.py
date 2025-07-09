@@ -42,10 +42,8 @@ def main():
                 kill_density = ret_kill_density_nostratz(match_data)
                 players = get_match_data_nostratz(match)["players"]
 
-                # llm informed
+                # Get stratz response for enhanced analysis
                 stratz_response = query_stratz(match)
-                formatted_output = format_match_data(stratz_response)
-                llm_summary = get_llm_summary(formatted_output)
 
                 leaver = 0
                 for player in players:
@@ -67,11 +65,17 @@ def main():
 | URL        : stratz.com/matches/{match}
 --------------------------------------
 """
-                    radiant, dire = create_heroes_string(stratz_players_data)
+                    # Get complete match analysis with enhanced data
+                    formatted_output = format_match_data(stratz_response)
+                    llm_summary = get_llm_summary(formatted_output)
+
+                    # Get concise player summary
+                    player_summary = format_player_summary(stratz_response)
+
+                    # Send match summary, LLM analysis, and player summary
                     send_message(f"```{match_summary}```")
-                    # send_message(f"```{radiant}```")
-                    # send_message(f"```{dire}```")
                     send_message(f"```{llm_summary}```")
+                    send_message(f"```{player_summary}```")
 
                     logger.info(f"Processed match {match}")
 

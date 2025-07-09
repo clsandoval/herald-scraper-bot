@@ -104,8 +104,6 @@ QUERY_HEADER = {
 }
 STRATZ_QUERY = """{
   match(id: MATCH_ID) {
-    predictedWinRates
-    winRates
     players {
       heroId
       kills
@@ -114,6 +112,53 @@ STRATZ_QUERY = """{
       position
       steamAccount {
         seasonRank
+      }
+      stats {
+        actionsPerMinute
+        abilityCastReport{
+          abilityId
+          count
+          targets{
+            target
+            count
+            damage
+            duration
+          }
+        }
+        itemUsed{
+          itemId
+          count
+        }
+        itemPurchases {
+          time
+          itemId
+        }
+        courierKills {
+          time
+          positionX
+          positionY
+        }
+        wards {
+          time
+          positionX
+          positionY
+          type
+        }
+        killEvents {
+          time
+          target
+          byAbility
+          byItem
+        }
+        deathEvents {
+          time
+          attacker
+          target
+          byItem
+          byAbility
+          positionX
+          positionY
+        }
       }
       playbackData {
         purchaseEvents {
@@ -420,7 +465,7 @@ def check_for_guardian(stratz_data):
 
 def format_match_data(match_data):
     """
-    Format match data with proper labels using hero and item names
+    Format match data with ALL available information from the enhanced GraphQL query
     """
 
     def get_hero_name(hero_id):
@@ -444,26 +489,24 @@ def format_match_data(match_data):
         }
         return position_map.get(position, position)
 
+    def format_time(seconds):
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes:02d}:{secs:02d}"
+
     match = match_data["data"]["match"]
 
     # Header
-    result = "=== DOTA 2 MATCH ANALYSIS ===\n\n"
-
-    # Win rates overview
-    result += "WIN RATES:\n"
-    result += (
-        f"Predicted Win Rates: {match['predictedWinRates'][:5]}... (first 5 values)\n"
-    )
-    result += f"Actual Win Rates: {match['winRates'][:5]}... (first 5 values)\n\n"
+    result = "=== COMPLETE DOTA 2 MATCH ANALYSIS ===\n\n"
 
     # Teams
     radiant_players = [p for p in match["players"] if p["isRadiant"]]
     dire_players = [p for p in match["players"] if not p["isRadiant"]]
 
-    # Format team
+    # Format team with ALL available data
     def format_team(players, team_name):
         team_result = f"{team_name} TEAM:\n"
-        team_result += "=" * 50 + "\n"
+        team_result += "=" * 80 + "\n"
 
         for player in players:
             hero_name = get_hero_name(player["heroId"])
@@ -477,10 +520,232 @@ def format_match_data(match_data):
             team_result += f"  Level: {player['level']}\n"
             team_result += f"  Hero Damage: {player['heroDamage']:,}\n"
 
-            # Rank
+            # Calculate and display average APM
+            if "stats" in player and "actionsPerMinute" in player["stats"]:
+                apm_values = player["stats"]["actionsPerMinute"]
+                if apm_values:
+                    avg_apm = sum(apm_values) / len(apm_values)
+                    team_result += f"  Average APM: {avg_apm:.1f}\n"
+
+            # Rank and Dota Plus
             if player["steamAccount"] and player["steamAccount"]["seasonRank"]:
                 rank = player["steamAccount"]["seasonRank"]
                 team_result += f"  Rank: {rank}\n"
+
+            if player["dotaPlus"] and player["dotaPlus"]["level"]:
+                team_result += f"  Dota Plus Level: {player['dotaPlus']['level']}\n"
+
+            # Final Items
+            items = [
+                get_item_name(player.get("item0Id")),
+                get_item_name(player.get("item1Id")),
+                get_item_name(player.get("item2Id")),
+                get_item_name(player.get("item3Id")),
+                get_item_name(player.get("item4Id")),
+                get_item_name(player.get("item5Id")),
+            ]
+            team_result += f"  Final Items: {' | '.join(items)}\n"
+
+            # NEW STATS DATA
+            if "stats" in player:
+                stats = player["stats"]
+
+                # Actions per minute
+                if "actionsPerMinute" in stats:
+                    team_result += "  Actions Per Minute:\n"
+                    for minute, apm in enumerate(stats["actionsPerMinute"]):
+                        team_result += f"    Minute {minute} - {apm} APM\n"
+
+                # Ability Cast Report (NOT WORKING CURRENTLY)
+                # if "abilityCastReport" in stats and stats["abilityCastReport"]:
+                #    team_result += f"  Ability Usage Summary:\n"
+                #
+                #    for ability_cast in stats["abilityCastReport"]:
+                #        ability_name = get_ability_name(ability_cast["abilityId"])
+                #        cast_count = ability_cast["count"]
+                #        team_result += f"    {ability_name}: {cast_count} casts\n"
+                #
+                #        # Targets for this ability
+                #        if "targets" in ability_cast and ability_cast["targets"]:
+                #            for target in ability_cast["targets"]:
+                #                target_name = get_hero_name(
+                #                    target.get("target", "Unknown")
+                #                )
+                #                target_count = target.get("count", 0)
+                #                damage = target.get("damage", 0)
+                #                duration = target.get("duration", 0)
+                #                team_result += f"      -> {target_name}: {target_count} times, {damage} dmg, {duration}s duration\n"
+
+                # Item Usage
+                if "itemUsed" in stats and stats["itemUsed"]:
+                    team_result += f"  Item Usage Summary:\n"
+                    for item_use in stats["itemUsed"]:
+                        item_name = get_item_name(item_use["itemId"])
+                        use_count = item_use["count"]
+                        team_result += f"    {item_name}: Used {use_count} times\n"
+
+                # Item Purchases (detailed timeline)
+                if "itemPurchases" in stats and stats["itemPurchases"]:
+                    team_result += f"  Complete Purchase History ({len(stats['itemPurchases'])} purchases):\n"
+                    for purchase in stats["itemPurchases"]:
+                        time_str = format_time(purchase["time"])
+                        item_name = get_item_name(purchase["itemId"])
+                        team_result += f"    {time_str} - {item_name}\n"
+
+                # Courier Kills
+                if "courierKills" in stats and stats["courierKills"]:
+                    team_result += f"  Courier Kills ({len(stats['courierKills'])}):\n"
+                    for courier_kill in stats["courierKills"]:
+                        time_str = format_time(courier_kill["time"])
+                        pos_x = courier_kill["positionX"]
+                        pos_y = courier_kill["positionY"]
+                        team_result += (
+                            f"    {time_str} - Courier killed at ({pos_x}, {pos_y})\n"
+                        )
+
+                # Ward Placements
+                if "wards" in stats and stats["wards"]:
+                    team_result += f"  Ward Activity ({len(stats['wards'])} wards):\n"
+                    for ward in stats["wards"]:
+                        time_str = format_time(ward["time"])
+                        pos_x = ward["positionX"]
+                        pos_y = ward["positionY"]
+                        ward_type = ward.get("type", "Unknown")
+                        team_result += (
+                            f"    {time_str} - {ward_type} ward at ({pos_x}, {pos_y})\n"
+                        )
+
+                # Kill Events
+                if "killEvents" in stats and stats["killEvents"]:
+                    team_result += (
+                        f"  Kill Events ({len(stats['killEvents'])} kills):\n"
+                    )
+                    for kill in stats["killEvents"]:
+                        time_str = format_time(kill["time"])
+                        target_name = get_hero_name(kill.get("target", "Unknown"))
+                        by_ability = (
+                            get_ability_name(kill.get("byAbility"))
+                            if kill.get("byAbility")
+                            else "Auto-attack"
+                        )
+                        by_item = (
+                            get_item_name(kill.get("byItem"))
+                            if kill.get("byItem")
+                            else "None"
+                        )
+                        team_result += (
+                            f"    {time_str} - Killed {target_name} with {by_ability}"
+                        )
+                        if by_item != "None":
+                            team_result += f" (using {by_item})"
+                        team_result += "\n"
+
+                # Death Events
+                if "deathEvents" in stats and stats["deathEvents"]:
+                    team_result += (
+                        f"  Death Events ({len(stats['deathEvents'])} deaths):\n"
+                    )
+                    for death in stats["deathEvents"]:
+                        time_str = format_time(death["time"])
+                        attacker_name = get_hero_name(death.get("attacker", "Unknown"))
+                        by_ability = (
+                            get_ability_name(death.get("byAbility"))
+                            if death.get("byAbility")
+                            else "Auto-attack"
+                        )
+                        by_item = (
+                            get_item_name(death.get("byItem"))
+                            if death.get("byItem")
+                            else "None"
+                        )
+                        pos_x = death.get("positionX", 0)
+                        pos_y = death.get("positionY", 0)
+                        team_result += f"    {time_str} - Killed by {attacker_name} with {by_ability}"
+                        if by_item != "None":
+                            team_result += f" (using {by_item})"
+                        team_result += f" at ({pos_x}, {pos_y})\n"
+
+            # Playback Data (skill order)
+            if "playbackData" in player:
+                if "abilityLearnEvents" in player["playbackData"]:
+                    abilities = player["playbackData"]["abilityLearnEvents"]
+                    team_result += (
+                        f"  Complete Skill Order ({len(abilities)} levels):\n"
+                    )
+                    for i, ability in enumerate(abilities):
+                        time_str = format_time(ability["time"])
+                        ability_name = get_ability_name(ability["abilityId"])
+                        team_result += f"    Lvl {i+1} ({time_str}): {ability_name}\n"
+
+            team_result += "\n"
+
+        return team_result
+
+    # Add both teams
+    result += format_team(radiant_players, "RADIANT")
+    result += "\n"
+    result += format_team(dire_players, "DIRE")
+
+    return result
+
+
+def format_player_summary(match_data):
+    """
+    Format a concise per-player summary with KDA, rank, items, Dota Plus level, and average APM
+    """
+
+    def get_hero_name(hero_id):
+        return HEROES.get(hero_id, f"Unknown Hero {hero_id}")
+
+    def get_item_name(item_id):
+        if item_id is None:
+            return "Empty"
+        return ITEMS.get(item_id, f"Unknown Item {item_id}")
+
+    def format_position(position):
+        position_map = {
+            "POSITION_1": "Carry",
+            "POSITION_2": "Mid",
+            "POSITION_3": "Offlaner",
+            "POSITION_4": "Soft Support",
+            "POSITION_5": "Hard Support",
+        }
+        return position_map.get(position, position)
+
+    def format_herald_rank(rank):
+        if rank is None:
+            return "Unranked"
+        if 11 <= rank <= 15:
+            herald_level = rank - 10
+            return f"Herald {herald_level}"
+        else:
+            return f"Rank {rank}"
+
+    match = match_data["data"]["match"]
+
+    # Header
+    result = "=== PLAYER SUMMARY ===\n\n"
+
+    # Teams
+    radiant_players = [p for p in match["players"] if p["isRadiant"]]
+    dire_players = [p for p in match["players"] if not p["isRadiant"]]
+
+    def format_team_summary(players, team_name):
+        team_result = f"{team_name} TEAM:\n"
+        team_result += "-" * 50 + "\n"
+
+        for player in players:
+            hero_name = get_hero_name(player["heroId"])
+            position = format_position(player["position"])
+
+            # KDA
+            kda = f"{player['kills']}/{player['deaths']}/{player['assists']}"
+
+            # Rank
+            rank = None
+            if player["steamAccount"] and player["steamAccount"]["seasonRank"]:
+                rank = player["steamAccount"]["seasonRank"]
+            rank_str = format_herald_rank(rank)
 
             # Items
             items = [
@@ -491,39 +756,30 @@ def format_match_data(match_data):
                 get_item_name(player.get("item4Id")),
                 get_item_name(player.get("item5Id")),
             ]
-            team_result += f"  Items: {' | '.join(items)}\n"
+            items_str = " | ".join(items)
 
-            # Sample of purchase events (first 5)
-            if "playbackData" in player and "purchaseEvents" in player["playbackData"]:
-                purchases = player["playbackData"]["purchaseEvents"]
-                team_result += f"  All Purchases:\n"
-                for purchase in purchases:
-                    time_min = purchase["time"] // 60
-                    time_sec = purchase["time"] % 60
-                    item_name = get_item_name(purchase["itemId"])
-                    team_result += f"    {time_min:02d}:{time_sec:02d} - {item_name}\n"
+            # Dota Plus Level
+            dota_plus_level = "None"
+            if player["dotaPlus"] and player["dotaPlus"]["level"]:
+                dota_plus_level = str(player["dotaPlus"]["level"])
 
-            # Sample of ability events (first 5)
-            if (
-                "playbackData" in player
-                and "abilityLearnEvents" in player["playbackData"]
-            ):
-                abilities = player["playbackData"]["abilityLearnEvents"]
-                team_result += f"  All Abilities (timestamp of level up):\n"
-                for ability in abilities:
-                    time_min = ability["time"] // 60
-                    time_sec = ability["time"] % 60
-                    ability_name = get_ability_name(ability["abilityId"])
-                    team_result += f"    {time_min:02d}:{time_sec:02d} - {ability_name} (Level {1+int(ability['level'])})\n"
+            # Average APM
+            avg_apm = "N/A"
+            if "stats" in player and "actionsPerMinute" in player["stats"]:
+                apm_values = player["stats"]["actionsPerMinute"]
+                if apm_values:
+                    avg_apm = f"{sum(apm_values) / len(apm_values):.1f}"
 
-            team_result += "\n"
+            # Format player line
+            team_result += f"{hero_name} ({position})\n"
+            team_result += f"  KDA: {kda} | Rank: {rank_str} | APM: {avg_apm} | Dota+: {dota_plus_level}\n"
+            team_result += f"  Items: {items_str}\n\n"
 
         return team_result
 
     # Add both teams
-    result += format_team(radiant_players, "RADIANT")
-    result += "\n"
-    result += format_team(dire_players, "DIRE")
+    result += format_team_summary(radiant_players, "RADIANT")
+    result += format_team_summary(dire_players, "DIRE")
 
     return result
 
@@ -587,6 +843,10 @@ The justification for the rating should cite concrete stats or patterns, don't b
             model="o3",
             messages=[{"role": "user", "content": prompt}],
         )
+        usage = response.usage
+        print("input_tokens", usage.prompt_tokens)
+        print("output_tokens", usage.completion_tokens)
+        print("total_tokens", usage.total_tokens)
 
         return response.choices[0].message.content.strip()
 
