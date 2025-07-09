@@ -1,18 +1,93 @@
-import urllib, cv2, uuid
+import urllib
 import pypika
 import json
 import requests
 import time
 import logging
 import numpy as np
+import os
 from constants import *
-from env import STRATZ_API_TOKEN, OPENAI_API_KEY
 from datetime import datetime, timedelta
 from pypika import Query, Table
-from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+
+# Get environment variables
+STRATZ_API_TOKEN = os.getenv("STRATZ_API_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Validate required environment variables
+if not STRATZ_API_TOKEN:
+    logging.error("STRATZ_API_TOKEN environment variable is not set")
+    raise ValueError("STRATZ_API_TOKEN environment variable is required")
+
+if not OPENAI_API_KEY:
+    logging.error("OPENAI_API_KEY environment variable is not set")
+    raise ValueError("OPENAI_API_KEY environment variable is required")
+
+if not TELEGRAM_BOT_TOKEN:
+    logging.error("TELEGRAM_BOT_TOKEN environment variable is not set")
+    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+if not TELEGRAM_CHAT_ID:
+    logging.error("TELEGRAM_CHAT_ID environment variable is not set")
+    raise ValueError("TELEGRAM_CHAT_ID environment variable is required")
+
+# Selenium and CV2 imports commented out since they're not used in lambda_function.py
+# import cv2, uuid
+# from linkpreview import link_preview, Link, LinkPreview, LinkGrabber
+# from selenium import webdriver
+# from selenium.webdriver.chrome.options import Options
+# from selenium.webdriver.common.by import By
+
+# Load ability_ids from JSON file
+try:
+    with open("ability_ids.json", "r") as f:
+        ability_ids = json.load(f)
+except FileNotFoundError:
+    logging.warning("ability_ids.json not found, ability names will show as Unknown")
+    ability_ids = {}
+
+# Chrome options function commented out since not used in lambda_function.py
+# def get_chrome_options():
+#     """Configure Chrome options for Docker/Lambda environment"""
+#     chrome_options = Options()
+#
+#     # Essential headless options
+#     chrome_options.add_argument("--headless")
+#     chrome_options.add_argument("--no-sandbox")
+#     chrome_options.add_argument("--disable-dev-shm-usage")
+#     chrome_options.add_argument("--disable-gpu")
+#     chrome_options.add_argument("--disable-web-security")
+#     chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+#     chrome_options.add_argument("--disable-extensions")
+#     chrome_options.add_argument("--disable-plugins")
+#     chrome_options.add_argument("--disable-images")
+#     chrome_options.add_argument("--disable-javascript")
+#     chrome_options.add_argument("--disable-default-apps")
+#     chrome_options.add_argument("--disable-background-timer-throttling")
+#     chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+#     chrome_options.add_argument("--disable-renderer-backgrounding")
+#     chrome_options.add_argument("--disable-background-networking")
+#     chrome_options.add_argument("--disable-features=TranslateUI")
+#     chrome_options.add_argument("--disable-ipc-flooding-protection")
+#     chrome_options.add_argument("--single-process")
+#     chrome_options.add_argument("--disable-dev-shm-usage")
+#     chrome_options.add_argument("--remote-debugging-port=9222")
+#     chrome_options.add_argument("--disable-software-rasterizer")
+#
+#     # Memory and performance optimizations
+#     chrome_options.add_argument("--memory-pressure-off")
+#     chrome_options.add_argument("--max_old_space_size=4096")
+#     chrome_options.add_argument("--no-zygote")
+#
+#     # Set Chrome binary path if available
+#     try:
+#         chrome_options.binary_location = "/usr/bin/chromium-browser"
+#     except:
+#         pass
+#
+#     return chrome_options
 
 TG_URL = "https://api.telegram.org/bot1982794836%3AAAGupWyxWjOtOiObaM3atPty8hL7OArAv94/sendMessage"
 STRATZ_GRAPHQL_URL = "https://api.stratz.com/graphql"
@@ -244,95 +319,20 @@ def get_max_hero_damage(match_data):
     return max_hero_damage, hero_id
 
 
-def get_link_preview_image(image_url, filename):
-    url = image_url
-    image_filename = filename
-    while True:
-        try:
-            grabber = LinkGrabber(
-                initial_timeout=20,
-                maxsize=1048576,
-                receive_timeout=10,
-                chunk_size=1024,
-            )
-            content, url = grabber.get_content(url)
-            link = Link(url, content)
-            preview = LinkPreview(link, parser="lxml")
-            preview_url = preview.image
+# Functions below are not used in lambda_function.py - commented out to avoid dependency issues
 
-            img_data = requests.get(preview_url).content
-            with open(filename, "wb") as handler:
-                handler.write(img_data)
+# def get_link_preview_image(image_url, filename):
+#     """Not used in lambda_function.py - placeholder function"""
+#     return filename
 
-            preview_image = cv2.imread(filename)
-            preview_image = cv2.resize(preview_image, (1200, 600))
-            break
-        except:
-            logging.warning("Link grabbing failed, retrying in 5 seconds")
-            time.sleep(5)
-            continue
+# def overlay_medals_on_link_preview(match_data_url):
+#     """Not used in lambda_function.py - placeholder function"""
+#     job_id = match_data_url.split("/")[-1]
+#     return f"{job_id}_link_medal_overlay.png"
 
-    cv2.imwrite(filename, preview_image)
-    return image_filename
-
-
-def overlay_medals_on_link_preview(match_data_url):
-    job_id = match_data_url.split("/")[-1]
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    browser = webdriver.Chrome(options=chrome_options)
-
-    browser.set_window_size(3840, 2160)
-    browser.get(match_data_url)
-    time.sleep(1)  # let page load
-    browser.execute_script("document.body.style.zoom='150%'")
-    browser.save_screenshot(f"{job_id}_match_data.png")
-    browser.close()
-
-    # X crop from 1320 - 1884, 1930 - 2490
-    # Y crop from 700 - 740, 700-740
-    get_link_preview_image(match_data_url, f"{job_id}_link_preview.png")
-    match_data_image = cv2.imread(f"{job_id}_match_data.png")
-    link_preview_image = cv2.imread(f"{job_id}_link_preview.png")
-
-    left_medals_image = match_data_image[700:730, 1354:1854]
-    right_medals_image = match_data_image[700:730, 1960:2460]
-
-    minimum_brightness = 0.66
-    cols, rows, _ = left_medals_image.shape
-    brightness = np.sum(left_medals_image) / (255 * cols * rows)
-    ratio = brightness / minimum_brightness
-
-    if ratio < 1:
-        left_medals_image = cv2.convertScaleAbs(
-            left_medals_image, alpha=1 / ratio, beta=0
-        )
-        right_medals_image = cv2.convertScaleAbs(
-            right_medals_image, alpha=1 / ratio, beta=0
-        )
-
-    link_preview_image[405:435, 35:535] = left_medals_image
-    link_preview_image[405:435, 665:1165] = right_medals_image
-
-    cv2.imwrite(f"{job_id}_link_medal_overlay.png", link_preview_image)
-
-    return f"{job_id}_link_medal_overlay.png"
-
-
-def overlay_medals_on_link_preview_exact(match_data_url):
-    job_id = match_data_url.split("/")[-1]
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    browser = webdriver.Chrome(options=chrome_options)
-
-    browser.set_window_size(3840, 2160)
-    browser.get(match_data_url)
-    time.sleep(1)  # let page load
-    s = browser.find_elements(By.XPATH, "//div[@data-heroid]")
-    links = [elem.get_attribute("href") for elem in s]
-    print(links)
+# def overlay_medals_on_link_preview_exact(match_data_url):
+#     """Not used in lambda_function.py - placeholder function"""
+#     pass
 
 
 def create_heroes_string(stratz_data):

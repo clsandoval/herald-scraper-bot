@@ -1,9 +1,13 @@
 # %%
+from dotenv import load_dotenv
+
+load_dotenv()
 from functions import *
 import logging, time
 import telebot
+import os
 
-tb = telebot.TeleBot("1982794836:AAGupWyxWjOtOiObaM3atPty8hL7OArAv94")
+tb = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 logging.getLogger().setLevel(logging.INFO)
 
 
@@ -27,6 +31,8 @@ for match, duration, date in zip(matches, durations, dates):
     hero_name = HERO_ID_TO_NAME.get(hero_id, "Unknown")
     kill_density = ret_kill_density_nostratz(match_data)
     players = get_match_data_nostratz(match)["players"]
+
+    # llm informed
     stratz_response = query_stratz(match)
     formatted_output = format_match_data(stratz_response)
     llm_summary = get_llm_summary(formatted_output)

@@ -1,15 +1,16 @@
-_funFROM public.ecr.aws/lambda/python:3.11
+FROM public.ecr.aws/lambda/python:3.11
 
-# Copy requirements.txt
+# Copy requirements.txt first for better caching
 COPY requirements.txt ${LAMBDA_TASK_ROOT}
 
-# Copy function code
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all necessary files
 COPY lambda_function.py ${LAMBDA_TASK_ROOT}
 COPY functions.py ${LAMBDA_TASK_ROOT}
-COPY env.py ${LAMBDA_TASK_ROOT}
+COPY constants.py ${LAMBDA_TASK_ROOT}
+COPY ability_ids.json ${LAMBDA_TASK_ROOT}
 
-# Install the specified packages
-RUN pip install -r requirements.txt
-
-# Set the CMD to your handler (could also be done as a parameter override outside of the Dockerfile)
+# Set the CMD to your handler
 CMD [ "lambda_function.handler" ]
