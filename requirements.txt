@@ -1,10 +1,6 @@
 pypika
-datetime
-pypika
 requests
-selenium
-linkpreview
 numpy
-env
-opencv-python
 pyTelegramBotAPI
+openai
+python-dotenv

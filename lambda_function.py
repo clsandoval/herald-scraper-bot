@@ -1,9 +1,13 @@
 # %%
+from dotenv import load_dotenv
+
+load_dotenv()
 from functions import *
 import logging, time
 import telebot
+import os
 
-tb = telebot.TeleBot("1982794836:AAGupWyxWjOtOiObaM3atPty8hL7OArAv94")
+tb = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 logging.getLogger().setLevel(logging.INFO)
 
 
@@ -12,7 +16,7 @@ def handler(event, context):
 
 
 logging.info("Start Herald Match Scraping")
-json_data = query()
+json_data = query(days_back=1)
 logging.info("Opendota Data Pulled")
 matches = [i["match_id"] for i in json_data["rows"]]
 durations = [i["duration"] for i in json_data["rows"]]
@@ -27,6 +31,11 @@ for match, duration, date in zip(matches, durations, dates):
     hero_name = HERO_ID_TO_NAME.get(hero_id, "Unknown")
     kill_density = ret_kill_density_nostratz(match_data)
     players = get_match_data_nostratz(match)["players"]
+
+    # llm informed
+    stratz_response = query_stratz(match)
+    formatted_output = format_match_data(stratz_response)
+    llm_summary = get_llm_summary(formatted_output)
     leaver = 0
     for player in players:
         if player["leaver_status"] != 0:
@@ -50,6 +59,7 @@ for match, duration, date in zip(matches, durations, dates):
         send_message(f"```{match_summary}```")
         send_message(f"```{radiant}```")
         send_message(f"```{dire}```")
+        send_message(f"```{llm_summary}```")
 
     time.sleep(1)
     logging.info("Scrape complete")
