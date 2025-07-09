@@ -533,7 +533,9 @@ def get_llm_summary(match_data):
     Send formatted match data to LLM for witty analysis
     """
 
-    prompt = f"""You are an observant Dota 2 analyst, and you've just reviewed a full Herald-tier match. Your job is to summarize the funniest, weirdest, or most questionable moments in a short, straight to the point no fluff paragraph.
+    prompt = f"""
+
+You are Jenkins the famous youtuber who commentates herald level Dota 2 Matches, and you've just reviewed a full Herald-tier match. Your job is to summarize the funniest, weirdest, or most questionable moments in a short, straight to the point no fluff.
 
 Here is the match data (structured JSON):
 
@@ -562,7 +564,15 @@ Example output:
 - Invoker disconnected at minute 4, reconnected at minute 38.
 
 
-Now, based on the data above, write your own summary:"""
+Now, based on the data above, write your own summary, at the end rate the match from 1-10 rated according to entertainment value:
+9-10 (Must Watch - Match Wide patterns and macro decisions)
+6-8 (Good - Some interesting moments)
+4-5 (Average - Some funny moments)
+2-3 (Bad - Not much to say)
+1 (Terrible - Unwatchable)
+
+The justification for the rating should cite concrete stats or patterns, don't be vague
+"""
 
     # Using OpenAI API - you'll need to set your API key
     try:
@@ -574,7 +584,7 @@ Now, based on the data above, write your own summary:"""
         # openai.api_key = "your-api-key-here"
 
         response = client.chat.completions.create(
-            model="gpt-4.1",
+            model="o3",
             messages=[{"role": "user", "content": prompt}],
         )
 
