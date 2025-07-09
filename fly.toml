@@ -16,4 +16,4 @@ primary_region = 'sea' # Singapore region, change as needed
 
 # Run the scraper once per day
 [processes]
-  scheduler = "while true; do python lambda_function.py; sleep 86400; done"  # Run every 24 hours
+  scheduler = "/bin/sh -c 'while true; do python lambda_function.py; sleep 86400; done'"
