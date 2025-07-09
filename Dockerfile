@@ -1,16 +1,28 @@
-FROM public.ecr.aws/lambda/python:3.11
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies if needed
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements.txt first for better caching
-COPY requirements.txt ${LAMBDA_TASK_ROOT}
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all necessary files
-COPY lambda_function.py ${LAMBDA_TASK_ROOT}
-COPY functions.py ${LAMBDA_TASK_ROOT}
-COPY constants.py ${LAMBDA_TASK_ROOT}
-COPY ability_ids.json ${LAMBDA_TASK_ROOT}
+# Copy all application files
+COPY lambda_function.py .
+COPY functions.py .
+COPY constants.py .
+COPY ability_ids.json .
 
-# Set the CMD to your handler
-CMD [ "lambda_function.handler" ]
+# Create a non-root user for security
+RUN useradd --create-home --shell /bin/bash app
+USER app
+
+# Set the command to run your application
+CMD ["python", "lambda_function.py"]
