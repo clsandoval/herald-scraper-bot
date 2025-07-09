@@ -8,10 +8,6 @@ primary_region = 'sea' # Singapore region, change as needed
 [env]
   # Add your environment variables here or set them via flyctl secrets
 
-# Since this is a one-time job/cronjob rather than a web service, 
-# we'll run it as a machine that can be triggered manually or scheduled
-[processes]
-  scraper = "python lambda_function.py"
 
 [[vm]]
   memory = '1gb'
