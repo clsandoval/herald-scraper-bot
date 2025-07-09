@@ -509,12 +509,12 @@ def format_match_data(match_data):
                 and "abilityLearnEvents" in player["playbackData"]
             ):
                 abilities = player["playbackData"]["abilityLearnEvents"]
-                team_result += f"  All Abilities:\n"
+                team_result += f"  All Abilities (timestamp of level up):\n"
                 for ability in abilities:
                     time_min = ability["time"] // 60
                     time_sec = ability["time"] % 60
                     ability_name = get_ability_name(ability["abilityId"])
-                    team_result += f"    {time_min:02d}:{time_sec:02d} - {ability_name} (Level {ability['level']})\n"
+                    team_result += f"    {time_min:02d}:{time_sec:02d} - {ability_name} (Level {1+int(ability['level'])})\n"
 
             team_result += "\n"
 
