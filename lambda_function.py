@@ -74,8 +74,8 @@ def main():
 
                     # Send match summary, LLM analysis, and player summary
                     send_message(f"```{match_summary}```")
-                    send_message(f"```{llm_summary}```")
                     send_message(f"```{player_summary}```")
+                    send_message(f"```{llm_summary}```")
 
                     logger.info(f"Processed match {match}")
 
