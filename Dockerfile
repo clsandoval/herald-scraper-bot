@@ -25,4 +25,4 @@ RUN useradd --create-home --shell /bin/bash app
 USER app
 
 # Set the command to run your application
-CMD ["python", "lambda_function.py"]
+CMD ["python", "discord_bot.py"]

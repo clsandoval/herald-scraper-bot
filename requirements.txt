@@ -4,3 +4,4 @@ numpy
 pyTelegramBotAPI
 openai
 python-dotenv
+discord.py
