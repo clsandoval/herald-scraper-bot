@@ -220,25 +220,39 @@ STRATZ_INFO = """{{
 
 async def query(url=OPENDOTA_URL, days_back=2, day_period=1):
     public_matches = Table("public_matches")
-    day_end = (datetime.now() - timedelta(days=days_back)).timestamp()
-    day_start = (datetime.now() - timedelta(days=days_back + day_period)).timestamp()
-    base_sql = "explorer?sql="
-    q = (
-        Query.from_(public_matches)
-        .select(
-            public_matches.match_id,
-            public_matches.start_time,
-            public_matches.avg_rank_tier,
-            public_matches.duration,
-        )
-        .where(public_matches.start_time >= day_start)
-        .where(public_matches.start_time <= day_end)
-        .where(public_matches.avg_rank_tier <= 16)
-        .where(public_matches.duration > 4500)
+    day_end = int((datetime.now() - timedelta(days=days_back)).timestamp())
+    day_start = int(
+        (datetime.now() - timedelta(days=days_back + day_period)).timestamp()
     )
-    request_url = url + base_sql + urllib.parse.quote(str(q))
+    base_sql = "explorer?sql="
 
-    async with aiohttp.ClientSession() as session:
+    # Calculate 1-hour chunks
+    chunk_size = 3600  # 1 hour in seconds
+    time_chunks = []
+    current_start = day_start
+
+    while current_start < day_end:
+        current_end = min(current_start + chunk_size, day_end)
+        time_chunks.append((current_start, current_end))
+        current_start = current_end
+
+    # Create queries for each chunk
+    async def query_chunk(session, chunk_start, chunk_end):
+        q = (
+            Query.from_(public_matches)
+            .select(
+                public_matches.match_id,
+                public_matches.start_time,
+                public_matches.avg_rank_tier,
+                public_matches.duration,
+            )
+            .where(public_matches.start_time >= chunk_start)
+            .where(public_matches.start_time <= chunk_end)
+            .where(public_matches.avg_rank_tier <= 16)
+            .where(public_matches.duration > 4500)
+        )
+        request_url = url + base_sql + urllib.parse.quote(str(q))
+
         while True:
             try:
                 async with session.get(request_url, headers=QUERY_HEADER) as response:
@@ -249,8 +263,38 @@ async def query(url=OPENDOTA_URL, days_back=2, day_period=1):
                     else:
                         raise aiohttp.ClientError(f"HTTP {response.status}")
             except Exception as e:
-                logging.warning(f"Request failed: {e}, retrying in 60 seconds")
+                logging.warning(
+                    f"Request failed for chunk {chunk_start}-{chunk_end}: {e}, retrying in 60 seconds"
+                )
                 await asyncio.sleep(60)
+
+    # Make all requests concurrently with shared session
+    async with aiohttp.ClientSession() as session:
+        chunk_results = await asyncio.gather(
+            *[query_chunk(session, start, end) for start, end in time_chunks]
+        )
+
+    # Combine all results
+    combined_rows = []
+    for result in chunk_results:
+        if isinstance(result, dict) and "rows" in result:
+            combined_rows.extend(result["rows"])
+        elif isinstance(result, list):
+            combined_rows.extend(result)
+
+    # Return in the same format as the original
+    if (
+        chunk_results
+        and isinstance(chunk_results[0], dict)
+        and "rows" in chunk_results[0]
+    ):
+        # If the API returns an object with 'rows' key
+        combined_result = chunk_results[0].copy()
+        combined_result["rows"] = combined_rows
+        return combined_result
+    else:
+        # If the API returns a direct array
+        return combined_rows
 
 
 def get_match_data_nostratz(match_id):
