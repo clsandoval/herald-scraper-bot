@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all application files
 COPY lambda_function.py .
+COPY discord_bot.py .
 COPY functions.py .
 COPY constants.py .
 COPY ability_ids.json .
