@@ -818,16 +818,6 @@ Example output:
 - Zeus pinged enemy jungle 47 times in 60 seconds.
 - No wards placed by either team after 25 min.
 - Invoker disconnected at minute 4, reconnected at minute 38.
-
-
-Now, based on the data above, write your own summary, at the end rate the match from 1-10 rated according to entertainment value:
-9-10 (Must Watch - Match Wide patterns and macro decisions)
-6-8 (Good - Some interesting moments)
-4-5 (Average - Some funny moments)
-2-3 (Bad - Not much to say)
-1 (Terrible - Unwatchable)
-
-The justification for the rating should cite concrete stats or patterns, don't be vague
 """
 
     # Using OpenAI API - you'll need to set your API key
