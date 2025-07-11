@@ -165,13 +165,14 @@ async def send_herald_report():
         for match, duration, date in zip(matches, durations, dates):
             try:
                 match_data = get_match_data_nostratz(match)
-                max_hero_damage, hero_id = get_max_hero_damage(match_data)
-                hero_name = HERO_ID_TO_NAME.get(hero_id, "Unknown")
+
                 kill_density = ret_kill_density_nostratz(match_data)
+
                 players = get_match_data_nostratz(match)["players"]
 
                 # Get stratz response for enhanced analysis
                 stratz_response = query_stratz(match)
+                logger.info("Stratz Response")
 
                 leaver = 0
                 for player in players:
@@ -193,9 +194,11 @@ async def send_herald_report():
                     # Create a public thread for this match
                     thread_name = f"Match {match} - {date}"
                     match_thread = await match_message.create_thread(name=thread_name)
+                    logger.info("Thread Created")
 
                     # Create and send player embeds in the thread
                     player_embeds = create_player_embed(stratz_response)
+                    logger.info("Player Embeds Created")
                     for embed in player_embeds:
                         await match_thread.send(embed=embed)
 
