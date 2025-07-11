@@ -148,7 +148,7 @@ async def send_herald_report():
             return
 
         logger.info("Start Herald Match Scraping")
-        json_data = query(days_back=1)
+        json_data = await query(days_back=1)
         logger.info("Opendota Data Pulled")
 
         matches = [i["match_id"] for i in json_data["rows"]]

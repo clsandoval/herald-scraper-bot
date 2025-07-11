@@ -6,6 +6,8 @@ import time
 import logging
 import numpy as np
 import os
+import asyncio
+import aiohttp
 from constants import *
 from datetime import datetime, timedelta
 from pypika import Query, Table
@@ -216,7 +218,7 @@ STRATZ_INFO = """{{
 """
 
 
-def query(url=OPENDOTA_URL, days_back=2, day_period=1):
+async def query(url=OPENDOTA_URL, days_back=2, day_period=1):
     public_matches = Table("public_matches")
     day_end = (datetime.now() - timedelta(days=days_back)).timestamp()
     day_start = (datetime.now() - timedelta(days=days_back + day_period)).timestamp()
@@ -234,17 +236,21 @@ def query(url=OPENDOTA_URL, days_back=2, day_period=1):
         .where(public_matches.avg_rank_tier <= 16)
         .where(public_matches.duration > 4500)
     )
-    request = url + base_sql + urllib.parse.quote(str(q))
-    req = urllib.request.Request(url=request, headers=QUERY_HEADER)
-    while True:
-        try:
-            data = urllib.request.urlopen(req)
-            break
-        except:
-            logging.warning("Timeout, retrying in 60 seconds")
-            time.sleep(60)
-    json_data = json.loads(data.read())
-    return json_data
+    request_url = url + base_sql + urllib.parse.quote(str(q))
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(request_url, headers=QUERY_HEADER) as response:
+                    if response.status == 200:
+                        data = await response.text()
+                        json_data = json.loads(data)
+                        return json_data
+                    else:
+                        raise aiohttp.ClientError(f"HTTP {response.status}")
+            except Exception as e:
+                logging.warning(f"Request failed: {e}, retrying in 60 seconds")
+                await asyncio.sleep(60)
 
 
 def get_match_data_nostratz(match_id):
