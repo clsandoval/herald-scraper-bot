@@ -6,10 +6,11 @@ import time
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+
+load_dotenv()
 from functions import *
 
 # Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
