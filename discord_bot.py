@@ -189,24 +189,24 @@ async def send_herald_report():
                     match_embed = create_match_embed(
                         match, date, duration, kill_density
                     )
-                    match_message = await channel.send(embed=match_embed)
 
                     # Create a public thread for this match
                     thread_name = f"Match {match} - {date}"
-                    match_thread = await match_message.create_thread(name=thread_name)
                     logger.info("Thread Created")
 
                     # Create and send player embeds in the thread
                     player_embeds = create_player_embed(stratz_response)
                     logger.info("Player Embeds Created")
-                    for embed in player_embeds:
-                        await match_thread.send(embed=embed)
 
                     # Get and send LLM summary as markdown in the thread
                     formatted_output = format_match_data(stratz_response)
                     llm_summary = await get_llm_summary(formatted_output)
 
-                    # Send LLM summary with markdown formatting in the thread
+                    # Send Everything
+                    match_message = await channel.send(embed=match_embed)
+                    match_thread = await match_message.create_thread(name=thread_name)
+                    for embed in player_embeds:
+                        await match_thread.send(embed=embed)
                     await match_thread.send(
                         f"## 📝 Match Analysis (Exact Timings might not be accurate due to API error)\n```\n{llm_summary}\n```"
                     )
