@@ -204,7 +204,7 @@ async def send_herald_report():
 
                     # Get and send LLM summary as markdown in the thread
                     formatted_output = format_match_data(stratz_response)
-                    llm_summary = get_llm_summary(formatted_output)
+                    llm_summary = await get_llm_summary(formatted_output)
 
                     # Send LLM summary with markdown formatting in the thread
                     await match_thread.send(

@@ -834,7 +834,7 @@ def format_player_summary(match_data):
     return result
 
 
-def get_llm_summary(match_data):
+async def get_llm_summary(match_data):
     """
     Send formatted match data to LLM for witty analysis
     """
@@ -872,14 +872,14 @@ Example output:
 
     # Using OpenAI API - you'll need to set your API key
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
         # Set your OpenAI API key here or via environment variable
         # openai.api_key = "your-api-key-here"
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="o3",
             messages=[{"role": "user", "content": prompt}],
         )
