@@ -104,7 +104,8 @@ QUERY_HEADER = {
     "Accept-Language": "en-US,en;q=0.8",
     "Connection": "keep-alive",
 }
-STRATZ_QUERY = """{
+STRATZ_QUERY = """
+query MatchPlayers {
   match(id: MATCH_ID) {
     players {
       heroId
@@ -368,11 +369,20 @@ def query_stratz(
     stratz_query=STRATZ_QUERY,
     api_token=STRATZ_API_TOKEN,
 ):
-    headers = {"Authorization": f"Bearer {api_token}", "User-Agent": "STRATZ_API"}
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "User-Agent": "STRATZ_API",
+        "Content-Type": "application/json",
+    }
     stratz_query = stratz_query.replace("MATCH_ID", str(match))
     while True:
         try:
-            r = requests.post(url, json={"query": stratz_query}, headers=headers)
+            r = requests.post(
+                url,
+                json={"query": stratz_query, "operationName": "MatchPlayers"},
+                headers=headers,
+            )
+
             break
         except:
             print("Stratz timeout, retrying in 1 second")

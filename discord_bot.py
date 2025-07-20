@@ -148,7 +148,7 @@ async def send_herald_report():
             return
 
         logger.info("Start Herald Match Scraping")
-        json_data = await query(days_back=1)
+        json_data = await query(days_back=3)
         logger.info("Opendota Data Pulled")
 
         matches = [i["match_id"] for i in json_data["rows"]]
@@ -164,6 +164,7 @@ async def send_herald_report():
 
         for match, duration, date in zip(matches, durations, dates):
             try:
+
                 match_data = get_match_data_nostratz(match)
 
                 kill_density = ret_kill_density_nostratz(match_data)
@@ -181,6 +182,7 @@ async def send_herald_report():
 
                 if leaver == 0:
                     # get granular list of player data from stratz
+
                     stratz_players_data = stratz_info(match)["data"]["match"]["players"]
                     if check_for_guardian(stratz_players_data):
                         continue
