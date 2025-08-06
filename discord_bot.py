@@ -143,6 +143,8 @@ async def send_herald_report():
     """Main function to scrape and send herald reports"""
     try:
         channel = bot.get_channel(DISCORD_CHANNEL_ID)
+        if channel is None:
+            channel = await bot.fetch_channel(DISCORD_CHANNEL_ID)
         if not channel:
             logger.error(f"Could not find channel with ID {DISCORD_CHANNEL_ID}")
             return
