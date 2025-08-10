@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +34,60 @@ if not DISCORD_BOT_TOKEN:
 
 if not DISCORD_CHANNEL_ID:
     raise ValueError("DISCORD_CHANNEL_ID environment variable is required")
+
+
+async def cleanup_old_threads(channel, days_threshold=10):
+    """Delete threads older than the specified number of days"""
+    try:
+        logger.info(f"Starting cleanup of threads older than {days_threshold} days")
+        cutoff_date = datetime.utcnow() - timedelta(days=days_threshold)
+        deleted_count = 0
+
+        # Get all threads in the channel
+        async for thread in channel.archived_threads(limit=None):
+            if (
+                thread.created_at
+                and thread.created_at.replace(tzinfo=None) < cutoff_date
+            ):
+                try:
+                    await thread.delete()
+                    deleted_count += 1
+                    logger.info(
+                        f"Deleted old thread: {thread.name} (created: {thread.created_at})"
+                    )
+                    # Add a small delay to avoid rate limiting
+                    await asyncio.sleep(0.5)
+                except discord.Forbidden:
+                    logger.warning(f"No permission to delete thread: {thread.name}")
+                except discord.NotFound:
+                    logger.warning(f"Thread already deleted: {thread.name}")
+                except Exception as e:
+                    logger.error(f"Error deleting thread {thread.name}: {str(e)}")
+
+        # Also check active threads
+        for thread in channel.threads:
+            if (
+                thread.created_at
+                and thread.created_at.replace(tzinfo=None) < cutoff_date
+            ):
+                try:
+                    await thread.delete()
+                    deleted_count += 1
+                    logger.info(
+                        f"Deleted old active thread: {thread.name} (created: {thread.created_at})"
+                    )
+                    await asyncio.sleep(0.5)
+                except discord.Forbidden:
+                    logger.warning(f"No permission to delete thread: {thread.name}")
+                except discord.NotFound:
+                    logger.warning(f"Thread already deleted: {thread.name}")
+                except Exception as e:
+                    logger.error(f"Error deleting thread {thread.name}: {str(e)}")
+
+        logger.info(f"Thread cleanup completed. Deleted {deleted_count} old threads.")
+
+    except Exception as e:
+        logger.error(f"Error during thread cleanup: {str(e)}")
 
 
 def create_match_embed(match_id, date, duration, kill_density):
@@ -148,6 +202,9 @@ async def send_herald_report():
         if not channel:
             logger.error(f"Could not find channel with ID {DISCORD_CHANNEL_ID}")
             return
+
+        # Clean up old threads before starting the herald report
+        await cleanup_old_threads(channel, days_threshold=10)
 
         logger.info("Start Herald Match Scraping")
         json_data = await query(days_back=3)
