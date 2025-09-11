@@ -23,14 +23,26 @@ class OpenDotaClient:
 
     async def discover_herald_matches(self) -> List[OpenDotaMatch]:
         """Discover Herald matches for periodic reporting."""
+        logger.info("Discovering Herald matches from last 24 hours")
+
+        time_chunks = self._generate_time_chunks(1)
+        expected_chunks = 144  # 24 hours * 60 minutes / 10 minutes per chunk
+        actual_chunks = len(time_chunks)
+
         logger.info(
-            f"Discovering Herald matches from last {self.config.query_days_back} days"
+            f"Generated {actual_chunks} time chunks (expected: {expected_chunks} for 24h with 10-minute intervals)"
         )
 
-        time_chunks = self._generate_time_chunks(self.config.query_days_back)
+        if actual_chunks != expected_chunks:
+            logger.warning(
+                f"Chunk count mismatch: expected {expected_chunks}, got {actual_chunks}"
+            )
+
         all_matches = []
+        processed_chunks = 0
 
         for start_time, end_time in time_chunks:
+            processed_chunks += 1
             try:
                 chunk_matches = await self._query_match_chunk(start_time, end_time)
                 all_matches.extend(chunk_matches)
@@ -41,6 +53,10 @@ class OpenDotaClient:
             except Exception as e:
                 logger.error(f"Failed to query chunk {start_time}-{end_time}: {e}")
                 continue
+
+        logger.info(
+            f"Successfully processed {processed_chunks} out of {actual_chunks} time chunks"
+        )
 
         # Filter for Herald eligibility
         herald_matches = [m for m in all_matches if m.is_herald_eligible]
@@ -56,16 +72,28 @@ class OpenDotaClient:
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
+                logger.debug(
+                    f"OpenDota match details request status: {response.status} for match {match_id}"
+                )
+
                 if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(
+                        f"OpenDota match details API error {response.status} for match {match_id}: {error_text}"
+                    )
                     raise ValueError(
                         f"OpenDota API error {response.status} for match {match_id}"
                     )
+
+                logger.debug(
+                    f"Successfully received 200 response for match details {match_id}"
+                )
 
                 data = await response.json()
                 return OpenDotaMatchDetail(**data)
 
     def _generate_time_chunks(self, days_back: int) -> List[Tuple[int, int]]:
-        """Generate 1-hour time chunks for efficient querying."""
+        """Generate 10-minute time chunks for efficient querying."""
         now = datetime.now(timezone.utc)
         start_date = now - timedelta(days=days_back)
 
@@ -73,7 +101,7 @@ class OpenDotaClient:
         current = start_date
 
         while current < now:
-            chunk_end = min(current + timedelta(hours=1), now)
+            chunk_end = min(current + timedelta(minutes=10), now)
             chunks.append((int(current.timestamp()), int(chunk_end.timestamp())))
             current = chunk_end
 
@@ -100,7 +128,6 @@ class OpenDotaClient:
             .where(public_matches.duration > 4500)  # 75+ minutes
             .where(public_matches.start_time >= start_time)
             .where(public_matches.start_time <= end_time)
-            .where(public_matches.lobby_type == 0)  # Public matches
             .limit(100)
             .orderby(public_matches.start_time, order=Order.desc)
         )
@@ -108,13 +135,15 @@ class OpenDotaClient:
         # Fix query string conversion - try different methods
         try:
             # Try get_sql() method first (safer)
-            if hasattr(query, 'get_sql'):
+            if hasattr(query, "get_sql"):
                 sql_string = query.get_sql()
             else:
                 # Fallback to str() conversion
                 sql_string = str(query)
-            
-            logger.debug(f"Generated SQL for chunk {start_time}-{end_time}: {sql_string}")
+
+            logger.debug(
+                f"Generated SQL for chunk {start_time}-{end_time}: {sql_string}"
+            )
         except Exception as e:
             logger.error(f"Failed to convert query to SQL string: {e}")
             raise ValueError(f"Query conversion failed: {e}")
@@ -125,28 +154,39 @@ class OpenDotaClient:
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
+                logger.debug(
+                    f"OpenDota API request status: {response.status} for chunk {start_time}-{end_time}"
+                )
 
                 if response.status != 200:
                     error_text = await response.text()
-                    logger.error(f"OpenDota API error {response.status}: {error_text}")
-                    raise ValueError(
-                        f"OpenDota explorer query failed: {response.status}"
+                    logger.error(
+                        f"OpenDota API error {response.status} for chunk {start_time}-{end_time}: {error_text}"
                     )
+                    raise ValueError(
+                        f"OpenDota explorer query failed: {response.status} for chunk {start_time}-{end_time}"
+                    )
+
+                logger.debug(
+                    f"Successfully received 200 response for chunk {start_time}-{end_time}"
+                )
 
                 try:
                     data = await response.json()
-                    logger.debug(f"Raw API response structure: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                    
+                    logger.debug(
+                        f"Raw API response structure: {list(data.keys()) if isinstance(data, dict) else type(data)}"
+                    )
+
                     # Validate response structure before Pydantic parsing
                     if not isinstance(data, dict):
                         raise ValueError(f"Expected dict response, got {type(data)}")
-                    
-                    if 'err' in data and data['err']:
+
+                    if "err" in data and data["err"]:
                         raise ValueError(f"OpenDota API returned error: {data['err']}")
-                    
+
                     query_response = OpenDotaQueryResponse(**data)
                     return query_response.to_matches()
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to parse API response: {e}")
                     logger.error(f"Raw response data: {data}")
