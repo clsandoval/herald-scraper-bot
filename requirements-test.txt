@@ -1,0 +1,25 @@
+# Test dependencies for Herald Scraper Bot
+
+# Core testing
+pytest==7.4.3
+pytest-asyncio==0.23.2
+pytest-mock==3.12.0
+pytest-cov==4.1.0
+
+# Async testing
+aioresponses==0.7.4
+
+# Mock and fixtures
+factory-boy==3.3.0
+freezegun==1.2.2
+
+# Main dependencies (should match production requirements)
+discord.py>=2.3.0
+aiohttp>=3.9.0
+openai>=1.0.0
+pypika>=0.48.0
+python-dotenv>=1.0.0
+
+# Optional for enhanced test output
+pytest-html==4.1.1
+pytest-xdist==3.5.0  # For parallel test execution

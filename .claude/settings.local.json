@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv add:*)",
+      "Bash(git push:*)",
+      "Bash(for dir in src/*/)",
+      "Bash(do echo \"=== $dir ===\")",
+      "Bash(ls:*)",
+      "Bash(done)",
+      "Bash(find:*)",
+      "Bash(python -m pytest tests/api/test_opendota.py::TestOpenDotaClient::test_make_request_success -v)",
+      "Bash(python -m pytest tests/api/test_stratz.py -v)",
+      "Bash(source:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python -m pytest tests/discord/ -v)",
+      "Bash(python -m pytest tests/discord_bot/ -v)",
+      "Bash(python -m pytest tests/discord_bot/test_bot.py::TestHeraldBot::test_on_ready -xvs)",
+      "Bash(python -m pytest tests/discord_bot/test_bot.py::TestHeraldBot::test_close -xvs)",
+      "Bash(python -m pytest tests/discord_bot/test_embeds.py -v)",
+      "Bash(python:*)",
+      "Bash(git rm:*)",
+      "Bash(git log:*)",
+      "Bash(pip install:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(uv run:*)",
+      "WebSearch",
+      "WebFetch(domain:community.openai.com)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force --index-filter 'git rm --cached --ignore-unmatch -r logs/' --prune-empty --tag-name-filter cat -- --all)",
+      "WebFetch(domain:docs.opendota.com)",
+      "Bash(timeout 30 uv run:*)",
+      "Bash(timeout 60 uv run python -m pytest:*)",
+      "Bash(mv:*)",
+      "Bash(hack/spec_metadata.sh:*)",
+      "Bash(uv sync:*)",
+      "WebFetch(domain:pypika.readthedocs.io)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

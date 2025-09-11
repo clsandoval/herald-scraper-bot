@@ -1,0 +1,19 @@
+# fly.toml app configuration file generated for herald-scraper-bot
+
+app = 'herald-scraper-bot'
+primary_region = 'sea' # Singapore region, change as needed
+
+[build]
+
+[env]
+  # Add your environment variables here or set them via flyctl secrets
+
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+# Run the scraper once per day
+[processes]
+  scheduler = "/bin/sh -c 'while true; do python discord_bot.py; sleep 86400; done'"
