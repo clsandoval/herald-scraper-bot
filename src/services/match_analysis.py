@@ -60,7 +60,7 @@ async def generate_match_highlights(
     • Radiant ran a four-core lineup (Viper, Necro, Magnus, Tinker) yet let an 84-minute clown fiesta drag on with 114 total deaths on their side alone.  
     • Highlight throw: Dire up ~15 k, Axe dives fountain with double BKB+Refresher shard, feeds, chain-feeds follow; game flips and crawls to 84-minute finish.
 
-    The output should be less than 2000 characters
+    The entire output should be less than 1500 characters
     """
 
     try:
@@ -222,12 +222,21 @@ def _build_match_context(
         # Purchase timing data from Stratz
         if hasattr(stratz_player, "purchase_events") and stratz_player.purchase_events:
             # Raw purchase timing data available for AI analysis
-            purchase_build = [
-                get_item_name(p.get("itemId")) for p in stratz_player.purchase_events
-            ]
+            purchase_build = []
+            for p in stratz_player.purchase_events:
+                item_id = p.get("itemId")
+                time_sec = p.get("time", 0)
+                if item_id:
+                    item_name = get_item_name(item_id)
+                    if time_sec > 0:
+                        minutes = time_sec // 60
+                        purchase_build.append(f"{item_name} @{minutes}m")
+                    else:
+                        purchase_build.append(item_name)
+
             if purchase_build:
                 context_parts.append(
-                    f" Item Purchase Order: {', '.join(purchase_build)}"
+                    f"  Item Purchase Timeline: {', '.join(purchase_build)}"
                 )
 
         # Special items/upgrades from OpenDota

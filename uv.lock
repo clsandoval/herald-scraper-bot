@@ -399,6 +399,7 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pypika" },
+    { name = "pytest-asyncio" },
     { name = "python-dotenv" },
 ]
 
@@ -421,6 +422,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.58.1" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pypika", specifier = ">=0.48.0" },
+    { name = "pytest-asyncio", specifier = ">=1.1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
