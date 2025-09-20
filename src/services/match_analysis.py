@@ -217,18 +217,15 @@ def _build_match_context(
         if neutral_items:
             context_parts.append(f"  Neutral Items: {', '.join(neutral_items)}")
 
-        # Purchase timing data from Stratz (if available in raw data)
-        # Note: This requires accessing raw Stratz GraphQL response data
-        # The current StratzPlayer model doesn't include purchaseEvents
-        # This would need to be passed separately or the model extended
+        # Purchase timing data from Stratz
         if hasattr(stratz_player, "purchase_events") and stratz_player.purchase_events:
             # Raw purchase timing data available for AI analysis
-            purchase_count = len(
-                [p for p in stratz_player.purchase_events if p.get("time", 0) >= 0]
-            )
-            if purchase_count > 0:
+            purchase_build = [
+                get_item_name(p.get("itemId")) for p in stratz_player.purchase_events
+            ]
+            if purchase_build:
                 context_parts.append(
-                    f"  Purchase Events Available: {purchase_count} items tracked with precise timing"
+                    f" Item Purchase Order: {', '.join(purchase_build)}"
                 )
 
         # Special items/upgrades from OpenDota
@@ -247,11 +244,9 @@ def _build_match_context(
             ability_upgrades = opendota_player["ability_upgrades_arr"]
             if ability_upgrades:
                 ability_names = [
-                    get_ability_name(ability_id) for ability_id in ability_upgrades[:10]
-                ]  # First 10 skills
-                context_parts.append(
-                    f"  Skill Build (first 10): {' → '.join(ability_names)}"
-                )
+                    get_ability_name(ability_id) for ability_id in ability_upgrades
+                ]
+                context_parts.append(f"  Skill Build {' → '.join(ability_names)}")
 
         # Ability usage data from Stratz (if available)
         # Note: This requires accessing raw Stratz GraphQL response data
