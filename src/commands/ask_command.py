@@ -105,7 +105,7 @@ class AskCommandCog(commands.Cog):
             )
 
             # Send response as plain message
-            formatted_response = f"🤖 **AI Analysis for Match {match_id}**\n\n**Q:** {question}\n**A:** {ai_response}"
+            formatted_response = f"Q:** {question}\n**A:** {ai_response}"
             await interaction.followup.send(formatted_response)
 
         except Exception as e:
@@ -154,7 +154,7 @@ Your analysis:"""
             model=self.config.openai_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,  # Increased for more detailed responses
-            temperature=0.7
+            temperature=0.5,
         )
 
         return response.choices[0].message.content.strip()

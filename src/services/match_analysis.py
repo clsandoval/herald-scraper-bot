@@ -65,7 +65,7 @@ async def generate_match_highlights(
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-5",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": context},
