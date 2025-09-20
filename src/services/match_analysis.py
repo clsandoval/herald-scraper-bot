@@ -211,7 +211,9 @@ def _build_match_context(
         if "item_neutral2" in opendota_player and opendota_player["item_neutral2"]:
             neutral_items.append(get_item_name(opendota_player["item_neutral2"]))
 
-        context_parts.append(f"  Items: {', '.join(items) if items else 'No items'}")
+        context_parts.append(
+            f"  Final Items: {', '.join(items) if items else 'No items'}"
+        )
         if backpack_items:
             context_parts.append(f"  Backpack: {', '.join(backpack_items)}")
         if neutral_items:
@@ -270,31 +272,6 @@ def _build_match_context(
         if "leaver_status" in opendota_player and opendota_player["leaver_status"] != 0:
             context_parts.append(
                 f"  ⚠️ Leaver Status: {opendota_player['leaver_status']}"
-            )
-
-        # Performance benchmarks (OpenDota provides percentiles)
-        if "benchmarks" in opendota_player:
-            benchmarks = opendota_player["benchmarks"]
-            notable_benchmarks = []
-
-            for stat, data in benchmarks.items():
-                if isinstance(data, dict) and "pct" in data:
-                    pct = data["pct"]
-                    if pct < 0.1:  # Bottom 10%
-                        notable_benchmarks.append(f"{stat}: {pct:.1%} (very low)")
-                    elif pct > 0.9:  # Top 10%
-                        notable_benchmarks.append(f"{stat}: {pct:.1%} (very high)")
-
-            if notable_benchmarks:
-                context_parts.append(
-                    f"  Notable Performance: {'; '.join(notable_benchmarks)}"
-                )
-
-        # Gold efficiency
-        if all(key in opendota_player for key in ["gold_spent", "net_worth"]):
-            total_gold = opendota_player["gold_spent"] + opendota_player.get("gold", 0)
-            context_parts.append(
-                f"  Gold Stats: {format_large_number(total_gold)} earned, {format_large_number(opendota_player['gold_spent'])} spent"
             )
 
         context_parts.append("")  # Separator between players
