@@ -9,6 +9,7 @@ from ..models.stratz import StratzMatchData, StratzPlayer
 from ..constants import (
     get_hero_name,
     get_item_name,
+    get_rank_name,
     format_duration,
     format_large_number,
 )
@@ -81,6 +82,12 @@ def create_team_analysis_embed(
         hero_name = get_hero_name(player.heroId)
         kda = f"{player.kills}/{player.deaths}/{player.assists}"
 
+        # Get player rank
+        rank_display = ""
+        if player.rank:
+            rank_name = get_rank_name(player.rank)
+            rank_display = f" [{rank_name}]"
+
         # Performance metrics
         apm_info = f"{player.average_apm:.0f} APM" if player.average_apm else "N/A APM"
 
@@ -98,7 +105,12 @@ def create_team_analysis_embed(
             f"**Items:** {items_text}"
         )
 
-        embed.add_field(name=f"{i}. {hero_name}", value=field_value, inline=False)
+        # Update field name to include rank
+        embed.add_field(
+            name=f"{i}. {hero_name}{rank_display}",
+            value=field_value,
+            inline=False
+        )
 
     return embed
 
