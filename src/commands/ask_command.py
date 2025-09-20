@@ -11,7 +11,6 @@ from typing import Optional, List
 from ..api.opendota import OpenDotaClient
 from ..api.stratz import StratzClient
 from ..cache.match_cache import UnifiedMatchCache
-from ..discord.embeds import create_ai_response_embed
 from ..constants import get_hero_name, get_rank_name
 from ..config import Config
 
@@ -104,9 +103,9 @@ class AskCommandCog(commands.Cog):
                 match_id, match_details, stratz_data, question
             )
 
-            # Send response as embed
-            response_embed = create_ai_response_embed(question, ai_response, match_id)
-            await interaction.followup.send(embed=response_embed)
+            # Send response as plain message
+            formatted_response = f"🤖 **AI Analysis for Match {match_id}**\n\n**Q:** {question}\n**A:** {ai_response}"
+            await interaction.followup.send(formatted_response)
 
         except Exception as e:
             logger.error(f"Error processing /ask command: {e}")

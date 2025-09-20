@@ -76,6 +76,83 @@ class StratzPlayer(BaseModel):
             return sum(apm_data) / len(apm_data)
         return None
 
+    @property
+    def purchase_events(self) -> List[Dict[str, Any]]:
+        """Get purchase timing events for AI analysis."""
+        # Check playbackData first (more detailed)
+        if self.playbackData and "purchaseEvents" in self.playbackData:
+            return self.playbackData["purchaseEvents"]
+        # Fallback to stats itemPurchases
+        if self.stats and "itemPurchases" in self.stats:
+            return self.stats["itemPurchases"]
+        return []
+
+    @property
+    def ability_cast_report(self) -> List[Dict[str, Any]]:
+        """Get ability cast statistics for AI analysis."""
+        if self.stats and "abilityCastReport" in self.stats:
+            return self.stats["abilityCastReport"]
+        return []
+
+    @property
+    def major_item_timings(self) -> List[str]:
+        """Extract major item purchase timings for AI analysis."""
+        timings = []
+        for event in self.purchase_events:
+            time_sec = event.get('time', 0)
+            item_id = event.get('itemId')
+            if item_id and time_sec > 0:
+                minutes = time_sec // 60
+                item_name = self._get_item_name_safe(item_id)
+                if self._is_major_item(item_id):
+                    timings.append(f"{item_name} @{minutes}m")
+        return timings
+
+    @property
+    def ability_usage_anomalies(self) -> List[str]:
+        """Identify unusual ability usage patterns."""
+        anomalies = []
+        for ability in self.ability_cast_report:
+            ability_id = ability.get('abilityId')
+            cast_count = ability.get('count', 0)
+            ability_name = self._get_ability_name_safe(ability_id)
+
+            # Detect spam clicking (>200 casts)
+            if cast_count > 200:
+                anomalies.append(f"{ability_name}: {cast_count} casts (spam clicking)")
+            # Detect underused ultimates (usually 6000+ ability IDs are ultimates)
+            elif ability_id and ability_id >= 6000 and cast_count <= 3:
+                anomalies.append(f"{ability_name}: only {cast_count} casts (underused ultimate)")
+
+        return anomalies
+
+    def _get_item_name_safe(self, item_id: int) -> str:
+        """Safely get item name with fallback."""
+        try:
+            from ..constants import get_item_name
+            return get_item_name(item_id)
+        except Exception:
+            return f"Item_{item_id}"
+
+    def _get_ability_name_safe(self, ability_id: int) -> str:
+        """Safely get ability name with fallback."""
+        try:
+            from ..constants import get_ability_name
+            return get_ability_name(ability_id)
+        except Exception:
+            return f"Ability_{ability_id}"
+
+    def _is_major_item(self, item_id: int) -> bool:
+        """Check if item is considered major (rough heuristic)."""
+        # Major items typically have higher IDs and cost more
+        # This is a simplified heuristic - could be improved with actual cost data
+        major_item_ids = {
+            1, 41, 46, 50, 102, 116, 135, 139, 141, 152, 156, 158,
+            166, 172, 185, 196, 206, 208, 214, 220, 236, 240, 242,
+            247, 250, 254, 263, 267, 277, 279, 285, 288, 292, 300
+        }
+        return item_id in major_item_ids or item_id > 200
+
 
 class StratzMatchResponse(BaseModel):
     """Wrapper for Stratz GraphQL response."""

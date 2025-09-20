@@ -10,6 +10,7 @@ from .api.stratz import StratzClient
 from .discord.embeds import create_match_summary_embed, create_team_analysis_embed
 from .discord.channels import get_verified_channels, create_match_thread, cleanup_old_threads
 from .cache.match_cache import UnifiedMatchCache
+from .services.match_analysis import generate_match_highlights
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,13 @@ class HeraldMatchReporter:
             match_embed = create_match_summary_embed(match_details, stratz_data)
             radiant_embed = create_team_analysis_embed(stratz_data.radiant_players, True)
             dire_embed = create_team_analysis_embed(stratz_data.dire_players, False)
+
+            # Generate AI highlights with comprehensive timing data
+            highlights = await generate_match_highlights(match_details, stratz_data)
+            if highlights:
+                logger.info(f"Generated AI highlights for match {match_id}")
+            else:
+                logger.info(f"AI highlights unavailable for match {match_id} (graceful degradation)")
             
             # Post to all channels
             success = True
@@ -122,7 +130,12 @@ class HeraldMatchReporter:
                         await thread.send(embed=radiant_embed)
                         await asyncio.sleep(1)  # Rate limiting
                         await thread.send(embed=dire_embed)
-                        
+
+                        # Post AI highlights if available
+                        if highlights:
+                            await asyncio.sleep(1)  # Rate limiting
+                            await thread.send(highlights)
+
                         # Add helpful message about ask command
                         await asyncio.sleep(1)
                         help_message = (
