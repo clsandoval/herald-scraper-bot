@@ -110,9 +110,12 @@ class StratzMatchData(BaseModel):
     
     @property
     def all_players_herald(self) -> bool:
-        """Verify all players with rank data are Herald."""
-        players_with_rank = [p for p in self.players if p.rank is not None]
-        return all(p.is_herald for p in players_with_rank) if players_with_rank else False
+        """Verify all players have rank data AND are Herald."""
+        # If any player has None/unavailable rank, disqualify the match
+        if any(p.rank is None for p in self.players):
+            return False
+        # All players must be herald
+        return all(p.is_herald for p in self.players)
     
     @property
     def average_apm(self) -> Optional[float]:
