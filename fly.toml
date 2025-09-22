@@ -1,0 +1,26 @@
+# fly.toml app configuration file for Herald Discord Bot
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+
+app = "herald-discord-bot"  # Change this to your app name
+primary_region = "iad"  # Change to your preferred region (e.g., "lax" for LA, "fra" for Frankfurt)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Add non-sensitive environment variables here
+  PYTHONUNBUFFERED = "1"
+
+# Discord bots don't need HTTP services
+# We run as a worker process instead
+[experimental]
+  auto_rollback = true
+
+[mounts]
+  source = "herald_bot_data"
+  destination = "/data"
+
+# Increase memory for bot operations
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
