@@ -111,8 +111,8 @@ def create_team_analysis_embed(
 
         field_value = (
             f"**{kda}** • {format_large_number(player.heroDamage)} dmg • {apm_info}\n"
-            f"**Items:** {items_text}"
-            f"{wl_text}"
+            f"**Items:** {items_text}\n"
+            f"Lifetime {wl_text}"
         )
 
         # Update field name to include rank

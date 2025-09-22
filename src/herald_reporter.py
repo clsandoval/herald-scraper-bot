@@ -122,12 +122,12 @@ class HeraldMatchReporter:
             player_wl_data = await self._fetch_player_win_loss(
                 match_details, stratz_data
             )
-            for k, v in player_wl_data.items():
-                if v[0] < 200 or v[1] < 200:
-                    logger.info(
-                        f"Match {match_id} has less than 200 wins or losses, skipping"
-                    )
-                    return False
+            # for k, v in player_wl_data.items():
+            #    if v[0] < 200 or v[1] < 200:
+            #        logger.info(
+            #            f"Match {match_id}: Player {k} has {v[0]} wins and {v[1]} losses, skipping"
+            #        )
+            #        return False
 
             # Create Discord embeds
             match_embed = create_match_summary_embed(match_details, stratz_data)
