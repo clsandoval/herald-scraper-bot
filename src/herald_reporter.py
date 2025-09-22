@@ -87,6 +87,17 @@ class HeraldMatchReporter:
         logger.info(f"Processing match {match_id}")
 
         try:
+            # Fetch win/loss data for all players
+            player_wl_data = await self._fetch_player_win_loss(
+                match_details, stratz_data
+            )
+            for k, v in player_wl_data.items():
+                if v[0] < 200 or v[1] < 200:
+                    logger.info(
+                        f"Match {match_id} has less than 200 wins or losses, skipping"
+                    )
+                    return False
+
             # Check if already cached (avoid duplicate processing)
             cached_data = await self.cache.get(match_id)
             if cached_data:
@@ -117,11 +128,6 @@ class HeraldMatchReporter:
                 # Cache for future ask commands
                 await self.cache.set(match_id, match_details, stratz_data)
                 logger.info(f"Cached match data for {match_id}")
-
-            # Fetch win/loss data for all players
-            player_wl_data = await self._fetch_player_win_loss(
-                match_details, stratz_data
-            )
 
             # Create Discord embeds
             match_embed = create_match_summary_embed(match_details, stratz_data)
