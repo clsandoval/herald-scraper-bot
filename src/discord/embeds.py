@@ -2,7 +2,7 @@
 
 import discord
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from ..models.opendota import OpenDotaMatchDetail
 from ..models.stratz import StratzMatchData, StratzPlayer
@@ -15,9 +15,9 @@ from ..constants import (
 )
 
 # Team colors
-RADIANT_COLOR = 0x00FF00  # Green
-DIRE_COLOR = 0xFF0000  # Red
-HERALD_COLOR = 0xFFD700  # Gold for Herald-specific content
+RADIANT_COLOR = 0x92C5F7  # Softer blue-green
+DIRE_COLOR = 0xFF6B6B  # Softer red
+HERALD_COLOR = 0xF39C12  # Warmer gold for Herald-specific content
 
 
 def create_match_summary_embed(
@@ -25,7 +25,7 @@ def create_match_summary_embed(
 ) -> discord.Embed:
     """Create comprehensive match summary embed combining OpenDota and Stratz data."""
     embed = discord.Embed(
-        title="🏆 Herald Match Analysis",
+        title="Herald Match Analysis",
         description=f"**Match ID:** [{match_details.match_id}](https://stratz.com/matches/{match_details.match_id})",
         color=HERALD_COLOR,
         url=f"https://stratz.com/matches/{match_details.match_id}",
@@ -36,9 +36,9 @@ def create_match_summary_embed(
     duration_str = format_duration(match_details.duration)
 
     embed.add_field(
-        name="📅 Date", value=match_date.strftime("%Y-%m-%d %H:%M UTC"), inline=True
+        name="Date", value=match_date.strftime("%Y-%m-%d %H:%M UTC"), inline=True
     )
-    embed.add_field(name="⏱️ Duration", value=duration_str, inline=True)
+    embed.add_field(name="Duration", value=duration_str, inline=True)
 
     # Analytics from Stratz data
     total_kills = stratz_data.total_kills
@@ -48,10 +48,8 @@ def create_match_summary_embed(
         else 0
     )
 
-    embed.add_field(
-        name="⚔️ Kill Density", value=f"{kill_density} kills/min", inline=True
-    )
-    embed.add_field(name="💀 Total Kills", value=str(total_kills), inline=True)
+    embed.add_field(name="Kill Density", value=f"{kill_density} kills/min", inline=True)
+    embed.add_field(name="Total Kills", value=str(total_kills), inline=True)
 
     embed.timestamp = match_date
     embed.set_footer(
@@ -82,6 +80,12 @@ def create_team_analysis_embed(
         hero_name = get_hero_name(player.heroId)
         kda = f"{player.kills}/{player.deaths}/{player.assists}"
 
+        # Get player rank
+        rank_display = ""
+        if player.rank:
+            rank_name = get_rank_name(player.rank)
+            rank_display = f" [{rank_name}]"
+
         # Performance metrics
         apm_info = f"{player.average_apm:.0f} APM" if player.average_apm else "N/A APM"
 
@@ -103,17 +107,17 @@ def create_team_analysis_embed(
             if item_id and item_id != 0:
                 items.append(get_item_name(item_id))
 
-        items_text = ", ".join(items[:3]) + ("..." if len(items) > 3 else "")
+        items_text = ", ".join(items) if items else "No items"
 
         field_value = (
-            f"**KDA:** {kda}\n"
-            f"**Damage:** {format_large_number(player.heroDamage)}\n"
-            f"{wl_text}\n"
-            f"**APM:** {apm_info}\n"
+            f"**{kda}** • {format_large_number(player.heroDamage)} dmg • {apm_info}\n"
             f"**Items:** {items_text}"
         )
 
-        embed.add_field(name=f"{i}. {hero_name}", value=field_value, inline=True)
+        # Update field name to include rank
+        embed.add_field(
+            name=f"{i}. {hero_name}{rank_display}", value=field_value, inline=False
+        )
 
     return embed
 

@@ -9,9 +9,9 @@ import logging
 from typing import Optional, List
 
 from ..api.opendota import OpenDotaClient
+from ..services.match_analysis import _build_match_context
 from ..api.stratz import StratzClient
 from ..cache.match_cache import UnifiedMatchCache
-from ..discord.embeds import create_ai_response_embed
 from ..constants import get_hero_name, get_rank_name
 from ..config import Config
 
@@ -104,9 +104,9 @@ class AskCommandCog(commands.Cog):
                 match_id, match_details, stratz_data, question
             )
 
-            # Send response as embed
-            response_embed = create_ai_response_embed(question, ai_response, match_id)
-            await interaction.followup.send(embed=response_embed)
+            # Send response as plain message
+            formatted_response = f"Q:** {question}\n**A:** {ai_response}"
+            await interaction.followup.send(formatted_response)
 
         except Exception as e:
             logger.error(f"Error processing /ask command: {e}")
@@ -127,59 +127,37 @@ class AskCommandCog(commands.Cog):
     ) -> str:
         """Generate comprehensive AI analysis using OpenAI."""
 
-        # Build comprehensive context prompt
-        radiant_summary = self._summarize_team(stratz_data.radiant_players, "Radiant")
-        dire_summary = self._summarize_team(stratz_data.dire_players, "Dire")
+        # Use the existing comprehensive context builder
+        match_context = _build_match_context(match_details, stratz_data)
 
-        # Format average APM safely
-        avg_apm = (
-            f"{stratz_data.average_apm:.0f}"
-            if stratz_data.average_apm is not None
-            else "N/A"
-        )
+        prompt = f"""You are analyzing a Herald-tier Dota 2 match with COMPLETE data access.
+You have detailed information about every player including:
+- Full KDA, damage, healing, and economic statistics
+- Item builds with purchase timing
+- Ability usage patterns and skill builds
+- APM data and performance benchmarks
+- Rank information for all players
 
-        prompt = f"""You are analyzing a Herald-tier Dota 2 match. Provide insightful analysis focused on Herald-level gameplay patterns, common mistakes, and learning opportunities.
-
-MATCH INFORMATION:
-Match ID: {match_id}
-Duration: {match_details.duration_formatted}
-Total Kills: {stratz_data.total_kills}
-Average APM: {avg_apm}
-
-RADIANT TEAM:
-{radiant_summary}
-
-DIRE TEAM:
-{dire_summary}
+{match_context}
 
 USER QUESTION: {question}
 
 ANALYSIS GUIDELINES:
-- Answer the question directly in one sentence less than 200 characters
+- Answer the question directly and concisely
+- Use specific data points from the match when relevant
+- Focus on Herald-level gameplay patterns and learning opportunities
+- Keep response under 500 characters for Discord readability
 
 Your analysis:"""
 
         response = await self.openai.chat.completions.create(
             model=self.config.openai_model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,  # Increased for more detailed responses
+            temperature=0.5,
         )
 
         return response.choices[0].message.content.strip()
-
-    def _summarize_team(self, players: List, team_name: str) -> str:
-        """Create team summary for AI context."""
-        summary_lines = []
-        for i, player in enumerate(players, 1):
-            hero_name = get_hero_name(player.heroId)
-            kda = f"{player.kills}/{player.deaths}/{player.assists}"
-            rank = get_rank_name(player.rank)
-            apm = f"{player.average_apm:.0f}" if player.average_apm else "N/A"
-
-            summary_lines.append(
-                f"  {i}. {hero_name}: {kda}, Level {player.level}, {rank}, {apm} APM"
-            )
-
-        return f"{team_name} Team:\n" + "\n".join(summary_lines)
 
 
 async def setup(bot: commands.Bot):
