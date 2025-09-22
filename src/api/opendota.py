@@ -92,6 +92,44 @@ class OpenDotaClient:
                 data = await response.json()
                 return OpenDotaMatchDetail(**data)
 
+    async def get_player_wl(self, account_id: int) -> Optional[Tuple[int, int]]:
+        """Get player's win/loss record.
+
+        Args:
+            account_id: The player's account ID
+
+        Returns:
+            Tuple of (wins, losses) or None if request fails or player is anonymous
+        """
+        if not account_id:
+            return None
+
+        url = f"{self.base_url}/players/{account_id}/wl"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    logger.debug(
+                        f"OpenDota player W/L request status: {response.status} for account {account_id}"
+                    )
+
+                    if response.status != 200:
+                        logger.warning(
+                            f"Failed to get W/L for account {account_id}: status {response.status}"
+                        )
+                        return None
+
+                    data = await response.json()
+                    wins = data.get("win", 0)
+                    losses = data.get("lose", 0)
+
+                    logger.debug(f"Player {account_id} W/L: {wins}/{losses}")
+                    return (wins, losses)
+
+        except Exception as e:
+            logger.error(f"Error fetching W/L for account {account_id}: {e}")
+            return None
+
     def _generate_time_chunks(self, days_back: int) -> List[Tuple[int, int]]:
         """Generate 10-minute time chunks for efficient querying."""
         now = datetime.now(timezone.utc)

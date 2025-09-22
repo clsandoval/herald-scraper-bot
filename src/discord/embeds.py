@@ -63,7 +63,7 @@ def create_match_summary_embed(
 
 
 def create_team_analysis_embed(
-    players: List[StratzPlayer], is_radiant: bool
+    players: List[StratzPlayer], is_radiant: bool, player_wl_data: dict = None
 ) -> discord.Embed:
     """Create detailed team analysis embed with player breakdowns."""
     team_name = "Radiant" if is_radiant else "Dire"
@@ -85,6 +85,17 @@ def create_team_analysis_embed(
         # Performance metrics
         apm_info = f"{player.average_apm:.0f} APM" if player.average_apm else "N/A APM"
 
+        # Win/Loss data
+        wl_text = "**W/L:** N/A"
+        if player_wl_data and player.heroId in player_wl_data:
+            wins, losses = player_wl_data[player.heroId]
+            total_games = wins + losses
+            if total_games > 0:
+                win_rate = (wins / total_games) * 100
+                wl_text = f"**W/L:** {wins}/{losses} ({win_rate:.1f}%)"
+            else:
+                wl_text = f"**W/L:** {wins}/{losses}"
+
         # Items
         items = []
         for j in range(6):
@@ -97,6 +108,7 @@ def create_team_analysis_embed(
         field_value = (
             f"**KDA:** {kda}\n"
             f"**Damage:** {format_large_number(player.heroDamage)}\n"
+            f"{wl_text}\n"
             f"**APM:** {apm_info}\n"
             f"**Items:** {items_text}"
         )
