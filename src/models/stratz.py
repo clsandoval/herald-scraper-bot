@@ -130,6 +130,20 @@ class StratzPlayer(BaseModel):
 
         return anomalies
 
+    @property
+    def kill_events(self) -> List[Dict[str, Any]]:
+        """Get kill events for AI analysis."""
+        if self.stats and "killEvents" in self.stats:
+            return self.stats["killEvents"]
+        return []
+
+    @property
+    def death_events(self) -> List[Dict[str, Any]]:
+        """Get death events for AI analysis."""
+        if self.stats and "deathEvents" in self.stats:
+            return self.stats["deathEvents"]
+        return []
+
     def _get_item_name_safe(self, item_id: int) -> str:
         """Safely get item name with fallback."""
         try:

@@ -277,6 +277,45 @@ def _build_match_context(
             if ability_usage:
                 context_parts.append(f"  Ability Usage: {', '.join(ability_usage)}")
 
+        # Kill events data from Stratz
+        if hasattr(stratz_player, "kill_events") and stratz_player.kill_events:
+            kill_count = len(stratz_player.kill_events)
+            # Extract interesting kill patterns
+            first_blood = any(k.get("isFirstBlood") for k in stratz_player.kill_events)
+            multi_kills = []
+            for event in stratz_player.kill_events:
+                if event.get("isUltraKill"):
+                    multi_kills.append("Ultra Kill")
+                elif event.get("isTripleKill"):
+                    multi_kills.append("Triple Kill")
+                elif event.get("isDoubleKill"):
+                    multi_kills.append("Double Kill")
+
+            context_parts.append(f"  Kill Events: {kill_count} total kills")
+            if first_blood:
+                context_parts.append(f"    - First Blood")
+            if multi_kills:
+                context_parts.append(f"    - Multi-kills: {', '.join(set(multi_kills))}")
+
+        # Death events data from Stratz
+        if hasattr(stratz_player, "death_events") and stratz_player.death_events:
+            death_count = len(stratz_player.death_events)
+            # Extract interesting death patterns
+            death_timings = []
+            for event in stratz_player.death_events:
+                if "time" in event:
+                    death_timings.append(event["time"])
+
+            context_parts.append(f"  Death Events: {death_count} total deaths")
+            if death_timings:
+                # Check for feeding patterns (deaths within 60 seconds of each other)
+                rapid_deaths = 0
+                for i in range(1, len(death_timings)):
+                    if death_timings[i] - death_timings[i-1] < 60:
+                        rapid_deaths += 1
+                if rapid_deaths > 2:
+                    context_parts.append(f"    - Rapid deaths detected: {rapid_deaths} deaths within 60s of previous death")
+
         # Player behavior indicators
         if "leaver_status" in opendota_player and opendota_player["leaver_status"] != 0:
             context_parts.append(
