@@ -32,18 +32,7 @@ async def generate_match_highlights(
     prompt = """
     Analyze this Herald-tier Dota 2 match and create entertaining bullet points highlighting the most notable/ridiculous moments.
 
-    You have access to comprehensive timing data including exact purchase times and ability usage patterns. Focus on:
-
-    **Purchase Timing Analysis:**
-    - Major items bought at unusual times (e.g., "Blink Dagger @45m", "BKB @8m")
-    - Extremely late or early major item acquisitions
-
-    **Ability & Behavioral Analysis:**
-    - Spam clicking patterns (300+ casts of basic abilities)
-
-    **Herald-Specific Patterns:**
-    - Performance benchmark extremes (hero damage above 200k, etc.)
-    - Late-game item builds that make no sense for game state
+    You have access to comprehensive timing data including timelines of purchases, kills, and death patterns
 
     Format as markdown bullet points (Maximum of 10). Include specific timings and statistics when available.
     Start with: "## 📝 Herald Match Insights (With Precise Timing Data)"
