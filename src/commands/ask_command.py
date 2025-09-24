@@ -6,6 +6,7 @@ from discord import app_commands
 import re
 import asyncio
 import logging
+from langfuse import observe
 from typing import Optional, List
 
 from ..api.opendota import OpenDotaClient
@@ -122,6 +123,7 @@ class AskCommandCog(commands.Cog):
         match = re.search(r"Match (\d+)", thread_name)
         return int(match.group(1)) if match else None
 
+    @observe(name="ask_analysis")
     async def _generate_ai_analysis(
         self, match_id: int, match_details, stratz_data, question: str
     ) -> str:

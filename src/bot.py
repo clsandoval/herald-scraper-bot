@@ -83,11 +83,15 @@ class UnifiedHeraldBot(commands.Bot):
             logger.error(f"Setup hook failed: {e}")
             raise
 
+    @property
+    def uptime(self):
+        """Get bot uptime as timedelta."""
+        return datetime.now(timezone.utc) - self.start_time
+
     async def on_ready(self):
         """Bot ready event - start background tasks."""
-        uptime = datetime.now(timezone.utc) - self.start_time
         logger.info(
-            f"Herald bot ready! Connected as {self.user} (startup time: {uptime.total_seconds():.1f}s)"
+            f"Herald bot ready! Connected as {self.user} (startup time: {self.uptime.total_seconds():.1f}s)"
         )
 
         # Start herald reporting task (staggered to avoid startup conflicts)

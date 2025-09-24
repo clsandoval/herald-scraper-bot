@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from .config import Config
 from .bot import UnifiedHeraldBot
+from .health_server import HealthServer
 
 
 def setup_logging():
@@ -55,9 +56,20 @@ async def main():
 
         # Create and run bot
         bot = UnifiedHeraldBot(config)
+
+        # Create health server for monitoring
+        health_server = HealthServer(bot)
+
         async with bot:
-            logger.info("Starting Herald Discord Bot...")
-            await bot.start(config.discord_bot_token)
+            # Start health server
+            await health_server.start()
+
+            try:
+                logger.info("Starting Herald Discord Bot...")
+                await bot.start(config.discord_bot_token)
+            finally:
+                # Stop health server on shutdown
+                await health_server.stop()
 
     except KeyboardInterrupt:
         logger.info("Bot shutdown requested by user")

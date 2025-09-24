@@ -1,6 +1,7 @@
 """AI-powered match analysis functions for generating Herald match highlights."""
 
 import os
+from langfuse import observe
 from typing import Optional
 from openai import AsyncOpenAI
 from ..models.stratz import StratzMatchData
@@ -15,6 +16,7 @@ from ..constants import (
 )
 
 
+@observe(name="generate_match_highlights")
 async def generate_match_highlights(
     match_details: OpenDotaMatchDetail, stratz_data: StratzMatchData
 ) -> Optional[str]:

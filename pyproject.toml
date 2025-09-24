@@ -12,6 +12,7 @@ dependencies = [
     "pypika>=0.48.0",
     "python-dotenv>=1.0.0",
     "pytest-asyncio>=1.1.0",
+    "langfuse>=3.5.0",
 ]
 
 [dependency-groups]
