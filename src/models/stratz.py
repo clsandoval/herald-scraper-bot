@@ -132,17 +132,35 @@ class StratzPlayer(BaseModel):
 
     @property
     def kill_events(self) -> List[Dict[str, Any]]:
-        """Get kill events for AI analysis."""
-        if self.stats and "killEvents" in self.stats:
-            return self.stats["killEvents"]
-        return []
+        """Get kill events formatted as {time, ability_name, item_name}."""
+        if not self.stats or "killEvents" not in self.stats:
+            return []
+
+        formatted_events = []
+        for event in self.stats["killEvents"]:
+            formatted_event = {
+                "time": event.get("time", 0),
+                "ability_name": self._get_ability_name_safe(event.get("byAbility")) if event.get("byAbility") else None,
+                "item_name": self._get_item_name_safe(event.get("byItem")) if event.get("byItem") else None
+            }
+            formatted_events.append(formatted_event)
+        return formatted_events
 
     @property
     def death_events(self) -> List[Dict[str, Any]]:
-        """Get death events for AI analysis."""
-        if self.stats and "deathEvents" in self.stats:
-            return self.stats["deathEvents"]
-        return []
+        """Get death events formatted as {time, ability_name, item_name}."""
+        if not self.stats or "deathEvents" not in self.stats:
+            return []
+
+        formatted_events = []
+        for event in self.stats["deathEvents"]:
+            formatted_event = {
+                "time": event.get("time", 0),
+                "ability_name": self._get_ability_name_safe(event.get("byAbility")) if event.get("byAbility") else None,
+                "item_name": self._get_item_name_safe(event.get("byItem")) if event.get("byItem") else None
+            }
+            formatted_events.append(formatted_event)
+        return formatted_events
 
     def _get_item_name_safe(self, item_id: int) -> str:
         """Safely get item name with fallback."""
