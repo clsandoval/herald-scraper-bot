@@ -211,7 +211,10 @@ def _build_match_context(
             context_parts.append(f"  Neutral Items: {', '.join(neutral_items)}")
 
         # Purchase timing data from Stratz
-        if hasattr(stratz_player, "purchase_events") and stratz_player.purchase_events:
+        if (
+            hasattr(stratz_player, "purchase_events")
+            and stratz_player.purchase_events is not None
+        ):
             # Raw purchase timing data available for AI analysis
             purchase_build = []
             for p in stratz_player.purchase_events:
@@ -269,7 +272,10 @@ def _build_match_context(
         #        context_parts.append(f"  Ability Usage: {', '.join(ability_usage)}")
 
         # Kill events data from Stratz
-        if hasattr(stratz_player, "kill_events") and stratz_player.kill_events:
+        if (
+            hasattr(stratz_player, "kill_events")
+            and stratz_player.kill_events is not None
+        ):
             kill_count = len(stratz_player.kill_events)
             context_parts.append(f"  Kill Events: {kill_count} total kills")
 
@@ -285,7 +291,10 @@ def _build_match_context(
                 )
 
         # Death events data from Stratz
-        if hasattr(stratz_player, "death_events") and stratz_player.death_events:
+        if (
+            hasattr(stratz_player, "death_events")
+            and stratz_player.death_events is not None
+        ):
             death_count = len(stratz_player.death_events)
             # Show first few death events with details
             for i, event in enumerate(stratz_player.death_events, 1):

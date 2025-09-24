@@ -106,7 +106,7 @@ class AskCommandCog(commands.Cog):
             )
 
             # Send response as plain message
-            formatted_response = f"Q:** {question}\n**A:** {ai_response}"
+            formatted_response = f"Q:** {question}\n**\n{ai_response}"
             await interaction.followup.send(formatted_response)
 
         except Exception as e:

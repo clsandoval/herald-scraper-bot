@@ -138,6 +138,6 @@ def create_ai_response_embed(
         response = response[:800] + "\n\n*[Response truncated for Discord limits]*"
 
     embed.add_field(name="Analysis", value=response, inline=False)
-    embed.set_footer(text=f"Analysis for Match {match_id} | Powered by GPT-4o-mini")
+    embed.set_footer(text=f"Analysis for Match {match_id} | Powered by GPT-4.1-mini")
 
     return embed
