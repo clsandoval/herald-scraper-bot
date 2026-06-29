@@ -268,9 +268,12 @@ async def send_herald_report():
                     match_thread = await match_message.create_thread(name=thread_name)
                     for embed in player_embeds:
                         await match_thread.send(embed=embed)
+                    # ponytail: Discord caps a message at 2000 chars; chunk long summaries
                     await match_thread.send(
-                        f"## 📝 Match Analysis (Exact Timings might not be accurate due to API error)\n```\n{llm_summary}\n```"
+                        "## 📝 Match Analysis (Exact Timings might not be accurate due to API error)"
                     )
+                    for i in range(0, len(llm_summary), 1800):
+                        await match_thread.send(f"```\n{llm_summary[i:i + 1800]}\n```")
 
                     logger.info(f"Processed match {match}")
 
