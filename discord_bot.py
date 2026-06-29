@@ -46,7 +46,8 @@ async def cleanup_old_threads(channel, days_threshold=10):
         # Get all threads in the channel
         async for thread in channel.archived_threads(limit=None):
             if (
-                thread.created_at
+                thread.owner_id == bot.user.id
+                and thread.created_at
                 and thread.created_at.replace(tzinfo=None) < cutoff_date
             ):
                 try:
@@ -67,7 +68,8 @@ async def cleanup_old_threads(channel, days_threshold=10):
         # Also check active threads
         for thread in channel.threads:
             if (
-                thread.created_at
+                thread.owner_id == bot.user.id
+                and thread.created_at
                 and thread.created_at.replace(tzinfo=None) < cutoff_date
             ):
                 try:
