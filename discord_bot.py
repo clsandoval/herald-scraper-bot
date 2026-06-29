@@ -203,8 +203,6 @@ async def send_herald_report():
             logger.error(f"Could not find channel with ID {DISCORD_CHANNEL_ID}")
             return
 
-        # Clean up old threads before starting the herald report
-        await cleanup_old_threads(channel, days_threshold=10)
 
         logger.info("Start Herald Match Scraping")
         json_data = await query(days_back=3)
@@ -285,6 +283,9 @@ async def send_herald_report():
                 continue
 
         logger.info("Scrape complete")
+
+        # Clean up old threads after posting, so new reports appear immediately
+        await cleanup_old_threads(channel, days_threshold=10)
 
     except Exception as e:
         logger.error(f"Fatal error in send_herald_report: {str(e)}")
