@@ -30,11 +30,11 @@ without ever spamming the channel.
 <!-- Current scope. Building toward these. Hypotheses until shipped + validated. -->
 
 - [ ] Ingest recent **Herald-bracket** matches into a DB, pruning matches older than ~30 days (config knob)
-- [ ] Model matches richly — not one flat row; capture per-match detail (candidate: discrete time-window slices, pending spike)
+- [ ] Model matches richly — summary features + Stratz networth-lead array (for throw/comeback detection); full per-minute-per-player slices deferred until a query needs them
 - [ ] Answer natural-language questions by writing SQL over the match DB (the bot has the "smarts")
-- [ ] Use a **domain-knowledge skill** for what makes a good Herald replay to review (mined from Jenkins' videos)
+- [ ] Use the **`herald-replay-quality` skill** to rank review-worthy candidates; bot surfaces ranked candidates, a human picks
 - [ ] Respond to `@bot`-mentions in-channel; never post unprompted
-- [ ] Source match data from **OpenDota and/or Stratz** (chosen by spike bake-off)
+- [ ] **Discovery via OpenDota** `/publicMatches` (Herald filter) → **enrich via Stratz** (parsed detail); retry/backoff for OpenDota outages
 
 ### Out of Scope
 
@@ -53,17 +53,20 @@ without ever spamming the channel.
   `discord_bot.py` on Fly.io (self-scheduled 24h loop) hitting OpenDota via `functions.py`.
   Dead code: `database.py` (unused Supabase), Telegram/Lambda paths, `numpy`.
   **Security: a live Telegram bot token is hardcoded in `functions.py` and committed — revoke it.**
-- **Candidate base architecture**: `cs/daimon-cma-open-source` — a Discord agent bot
-  (Anthropic Managed Agents loop + skills-as-repos + Postgres/SQLAlchemy + Fly deploy).
-  Its agent-loop + skills system map directly onto "bot uses SQL + domain skills." Its
-  multi-tenant / MCP / Slack / billing scaffolding would be stripped. Final fork-vs-trim
-  decision deferred until after spikes.
-- **Two spikes gate the design** (running in parallel):
-  - **Spike A — data API bake-off**: OpenDota vs Stratz. Herald match discovery at volume,
-    per-match granularity *without* a manual parse request (parsed vs unparsed data is the
-    key risk for the time-slice ambition), and rate limits. Decides data source + schema.
-  - **Spike B — domain knowledge**: mine Jenkins' Herald Reviews videos → distill "what makes
-    a replay worth reviewing" into a skill the ranking agent uses.
+- **Base architecture (decided)**: fork `cs/daimon-cma-open-source` — Anthropic Managed Agents
+  loop + skills-as-repos + Postgres/SQLAlchemy + Fly deploy — trimmed to essentials. Keep
+  core (db/models/config/turn/skills), Discord adapter, and the scheduler adapter (reused for
+  the ingestion worker). Strip multi-tenant / MCP / Slack / billing / provisioning / OAuth.
+- **Spikes complete** (findings in `.planning/spikes/`):
+  - **Spike A — API bake-off** (`api-bakeoff/FINDINGS.md`): OpenDota is the only Herald ID feed
+    (~2k Herald/day, 4.2% of publicMatches); 15/15 fresh OD Herald matches were *unparsed*, but
+    the same matches come back *fully parsed* on Stratz (per-minute networth/xp, item timings,
+    lanes). → OpenDota discovery + Stratz enrichment; time-slice modeling feasible via Stratz;
+    ample rate-limit headroom; add retry/backoff (OD had a 15-min outage mid-spike).
+  - **Spike B — domain knowledge** (`herald-replay-quality/`): "good replay" = chaos in the
+    lowest bracket (10-MMR, marathon+kill-chaos, troll builds, hard heroes, big throws). Nearly
+    all computable from match data; comedic/human-interest payload is not → rank candidates,
+    human picks. Draft `SKILL.md` with a weighted 0–100 rubric written.
 
 ## Constraints
 
@@ -80,10 +83,13 @@ without ever spamming the channel.
 | Pivot from push (auto-post) to pull (answer on mention) | Server members annoyed by spam; the posting is the problem | — Pending |
 | Herald-only ingestion | Bot's niche is Jenkins' Herald Reviews | — Pending |
 | Agent writes SQL + uses domain skills (vs fixed query commands) | Flexibility; "smarts" is the product | — Pending |
-| Base on daimon architecture (trim to essentials) | Reuse working agent-loop + skills + Discord + deploy instead of rebuilding | — Pending |
-| Spike OpenDota vs Stratz before designing schema | Parsed/unparsed granularity is unknown and gates the data model | — Pending |
+| **Fork daimon, trimmed** (strip multi-tenant/MCP/Slack/billing; keep core+Discord+scheduler+deploy) | Reuse working MA agent-loop + skills + Discord + deploy; consistency with user's other bot | ✓ Decided |
+| Spike OpenDota vs Stratz before designing schema | Parsed/unparsed granularity is unknown and gates the data model | ✓ Good — decisive result |
+| **Data source: OpenDota discovery → Stratz enrichment** | OD is the only Herald ID feed (~2k/day); Stratz has parsed detail OD lacks (15/15 OD Herald unparsed) | ✓ Decided (spike evidence) |
+| **DB: Postgres** (daimon's SQLAlchemy + Alembic) | Inherited with the daimon fork; 60k-row scale is trivial | ✓ Decided |
+| Time-slices: store summary + networth-lead array; defer full per-minute slices | Covers throw/comeback scoring cheaply; full slices are YAGNI until a query needs them | — Pending |
 | Retention: prune matches older than ~30 days | Keep DB lean; recency is what matters for content | — Pending |
-| DB: lean to inherited Postgres over new SQLite | If reusing daimon, adding a table beats swapping the DB | — Pending (post-spike) |
+| Bot ranks candidates, human picks | Comedic payload / human-interest angle isn't computable (spike B) | ✓ Decided (spike evidence) |
 
 ## Evolution
 
