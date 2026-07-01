@@ -9,9 +9,9 @@ Requirements for the initial working bot. Each maps to a roadmap phase.
 
 ### Platform (fork & cleanup)
 
-- [ ] **PLAT-01**: Fork daimon trimmed — keep core (db/models/config/turn/skills), Discord adapter, and scheduler adapter; strip multi-tenant, MCP, Slack, billing, provisioning, OAuth
-- [ ] **PLAT-02**: All secrets loaded from env / Fly secrets; no secrets committed to source
-- [ ] **PLAT-03**: Leaked Telegram bot token revoked; legacy Telegram/Lambda/dead code (`bot.py`, `lambda_function.py`, `database.py`) removed
+- [x] **PLAT-01**: Fork daimon trimmed — keep core (db/models/config/turn/skills), Discord adapter, and scheduler adapter; strip multi-tenant, MCP, Slack, billing, provisioning, OAuth
+- [x] **PLAT-02**: All secrets loaded from env / Fly secrets; no secrets committed to source
+- [x] **PLAT-03**: Leaked Telegram bot token revoked; legacy Telegram/Lambda/dead code (`bot.py`, `lambda_function.py`, `database.py`) removed
 - [ ] **PLAT-04**: Deploys on Fly.io with Postgres attached and Alembic migrations run on release
 
 ### Data model
@@ -76,9 +76,9 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PLAT-01 | Phase 1 | Pending |
-| PLAT-02 | Phase 1 | Pending |
-| PLAT-03 | Phase 1 | Pending |
+| PLAT-01 | Phase 1 | Complete |
+| PLAT-02 | Phase 1 | Complete |
+| PLAT-03 | Phase 1 | Complete |
 | PLAT-04 | Phase 1 | Pending |
 | DATA-01 | Phase 2 | Pending |
 | ING-03 | Phase 2 | Pending |

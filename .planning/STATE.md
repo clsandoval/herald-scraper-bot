@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint (git-filter-repo human-verify)
-last_updated: "2026-07-01T11:46:07.099Z"
-last_activity: 2026-07-01 -- Phase 1 Plan 1 tasks 1-2 complete, halted at checkpoint
+stopped_at: Completed 01-01 (legacy purge + daimon-core scaffold + history scrub + force-push)
+last_updated: "2026-07-01T11:56:33.237Z"
+last_activity: 2026-07-01 -- Phase 1 Plan 1 complete (all 4 tasks)
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 33
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 ## Current Position
 
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
-Plan: 1 of 3 (tasks 1-2 of 4 complete; halted at Task 3 checkpoint)
-Status: Awaiting human verification (git-filter-repo legitimacy + Telegram token revocation)
-Last activity: 2026-07-01 -- Phase 1 Plan 1 tasks 1-2 complete, halted at checkpoint
+Plan: 2 of 3 (plan 01-01 complete)
+Status: Ready to execute plan 01-02
+Last activity: 2026-07-01 -- Phase 1 Plan 1 complete (all 4 tasks)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -44,11 +44,11 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| Phase 1 | 1 | 25 min | 25 min |
 
 **Recent Trend:**
 
-- Last 5 plans: -
+- Last 5 plans: 01-01 (25 min, 4 tasks, 43 files)
 - Trend: -
 
 *Updated after each plan completion*
@@ -70,9 +70,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 1: Leaked Telegram bot token in `functions.py` must be revoked as part of platform cleanup, not deferred
+- RESOLVED (01-01): Leaked Telegram bot token revoked via @BotFather and scrubbed from all git history (git filter-repo + force-push). Zero token occurrences remain in history.
 - Phase 5: Skill scoring signals used in Phase 4 will be based on summary-only data until Phase 5 lands richer per-player/net-worth-lead data — expect Phase 4 skill output to sharpen after Phase 5
-- Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint: git-filter-repo install + leaked Telegram token revocation require explicit human confirmation before Task 4's history rewrite + force-push can run
 
 ## Deferred Items
 
@@ -86,6 +85,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T11:46:07.094Z
-Stopped at: Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint (git-filter-repo human-verify)
-Resume file: .planning/phases/01-clean-platform-skeleton/01-01-PLAN.md
+Last session: 2026-07-01T11:56:33.232Z
+Stopped at: Completed 01-01-PLAN.md (Task 4 scrub + force-push done)
+Resume file: None
