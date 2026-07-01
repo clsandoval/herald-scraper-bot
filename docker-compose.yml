@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-daimon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-daimon}
+      POSTGRES_DB: ${POSTGRES_DB:-daimon}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-daimon}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs `alembic upgrade head` once against the compose Postgres, then exits.
+  # No `daimon defaults apply` (D-04 — that CLI command and its tenant/MA
+  # provisioning machinery are excluded from this fork entirely).
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DAIMON_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-daimon}:${POSTGRES_PASSWORD:-daimon}@postgres:5432/${POSTGRES_DB:-daimon}
+      DAIMON_ANTHROPIC__API_KEY: ${DAIMON_ANTHROPIC__API_KEY}
+    entrypoint: ["alembic"]
+    command: ["upgrade", "head"]
+    restart: "no"
+
+  discord:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      DAIMON_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-daimon}:${POSTGRES_PASSWORD:-daimon}@postgres:5432/${POSTGRES_DB:-daimon}
+      DAIMON_ANTHROPIC__API_KEY: ${DAIMON_ANTHROPIC__API_KEY}
+      DAIMON_DISCORD__BOT_TOKEN: ${DAIMON_DISCORD__BOT_TOKEN}
+    entrypoint: ["python", "-m", "daimon.adapters.discord"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

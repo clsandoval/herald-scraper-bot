@@ -3,14 +3,13 @@
 .gitignore
 
 # Python
-__pycache__
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
-env.py
 .env
-.venv
+.venv/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox
@@ -38,11 +37,10 @@ Thumbs.db
 *.swp
 *.swo
 
-# Testing and development
-test.py
-bot.py
+# Docs and planning (not needed in the image)
 *.md
 LICENSE
+.planning/
 
-# Fly.io
-fly.toml 
+# Fly.io (not needed inside the image itself)
+fly.toml

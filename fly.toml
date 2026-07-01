@@ -1,19 +1,37 @@
-# fly.toml app configuration file generated for herald-scraper-bot
+# fly.toml app configuration file for herald-scraper-bot-test (D-05: test
+# twin, NOT the prod app). Prod `herald-scraper-bot` is untouched and is not
+# redeployed until the overhaul is explicitly promoted (D-03).
 
-app = 'herald-scraper-bot'
-primary_region = 'sea' # Singapore region, change as needed
+app            = "herald-scraper-bot-test"
+primary_region = "sea"
+kill_signal    = "SIGTERM"
+kill_timeout   = "60s"
 
 [build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
+  strategy        = "rolling"
 
 [env]
-  # Add your environment variables here or set them via flyctl secrets
+  DAIMON_LOG__LEVEL = "INFO"
 
+[processes]
+  discord = "python -m daimon.adapters.discord"
+
+[checks]
+  [checks.discord_liveness]
+    type         = "http"
+    port         = 8081
+    method       = "get"
+    path         = "/"
+    interval     = "15s"
+    timeout      = "5s"
+    grace_period = "30s"
+    processes    = ["discord"]
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
-
-# Run the scraper once per day
-[processes]
-  scheduler = "/bin/sh -c 'while true; do python discord_bot.py; sleep 86400; done'"
+  size      = "shared-cpu-1x"
+  memory    = "512mb"
+  processes = ["discord"]
