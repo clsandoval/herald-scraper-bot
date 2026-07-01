@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "daimon-adapter-discord",
+    "daimon-adapter-scheduler",
     "daimon-core",
     "herald-scraper-bot",
 ]
@@ -341,6 +342,31 @@ requires-dist = [
 ]
 
 [[package]]
+name = "daimon-adapter-scheduler"
+version = "0.0.0"
+source = { editable = "packages/adapters/scheduler" }
+dependencies = [
+    { name = "anthropic" },
+    { name = "asyncpg" },
+    { name = "daimon-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", specifier = ">=0.96" },
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "daimon-core", editable = "packages/core" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.4" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2" },
+    { name = "structlog", specifier = ">=24" },
+]
+
+[[package]]
 name = "daimon-core"
 version = "0.0.0"
 source = { editable = "packages/core" }
@@ -571,6 +597,7 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "daimon-adapter-discord" },
+    { name = "daimon-adapter-scheduler" },
     { name = "daimon-core" },
 ]
 
@@ -583,6 +610,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "daimon-adapter-discord", editable = "packages/adapters/discord" },
+    { name = "daimon-adapter-scheduler", editable = "packages/adapters/scheduler" },
     { name = "daimon-core", editable = "packages/core" },
 ]
 
