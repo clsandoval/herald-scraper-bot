@@ -75,6 +75,9 @@ without ever spamming the channel.
 - **Interaction**: pull-only (mention-triggered); no unprompted output — hard requirement from the spam complaint
 - **Scope**: single-purpose personal bot for one streamer — resist enterprise scaffolding
 - **Security**: revoke the leaked Telegram token; no secrets committed to source
+- **Testing env**: bot is already installed in a **test Discord server** ("the herald replays server").
+  Do ALL dev/testing there. Do **not** deploy over or disturb the running **prod** bot/server
+  until the overhaul is explicitly promoted. (Prod = current `herald-scraper-bot` Fly app.)
 
 ## Key Decisions
 
