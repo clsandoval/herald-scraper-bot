@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-07-01T11:24:31.936Z"
-last_activity: 2026-07-01 -- Phase 1 planning complete
+stopped_at: Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint (git-filter-repo human-verify)
+last_updated: "2026-07-01T11:46:07.099Z"
+last_activity: 2026-07-01 -- Phase 1 Plan 1 tasks 1-2 complete, halted at checkpoint
 progress:
   total_phases: 6
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-01)
 
 **Core value:** Surface Herald matches worth reviewing on stream in response to a question — without ever spamming the channel.
-**Current focus:** Phase 1 (Clean Platform Skeleton)
+**Current focus:** Phase 1 — Clean Platform Skeleton
 
 ## Current Position
 
-Phase: 1 of 6 (Clean Platform Skeleton)
-Plan: Not yet planned
-Status: Ready to execute
-Last activity: 2026-07-01 -- Phase 1 planning complete
+Phase: 1 (Clean Platform Skeleton) — EXECUTING
+Plan: 1 of 3 (tasks 1-2 of 4 complete; halted at Task 3 checkpoint)
+Status: Awaiting human verification (git-filter-repo legitimacy + Telegram token revocation)
+Last activity: 2026-07-01 -- Phase 1 Plan 1 tasks 1-2 complete, halted at checkpoint
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -72,6 +72,7 @@ None yet.
 
 - Phase 1: Leaked Telegram bot token in `functions.py` must be revoked as part of platform cleanup, not deferred
 - Phase 5: Skill scoring signals used in Phase 4 will be based on summary-only data until Phase 5 lands richer per-player/net-worth-lead data — expect Phase 4 skill output to sharpen after Phase 5
+- Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint: git-filter-repo install + leaked Telegram token revocation require explicit human confirmation before Task 4's history rewrite + force-push can run
 
 ## Deferred Items
 
@@ -85,6 +86,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T10:25:33.501Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-clean-platform-skeleton/01-CONTEXT.md
+Last session: 2026-07-01T11:46:07.094Z
+Stopped at: Phase 1 Plan 1 (01-01) halted at Task 3 checkpoint (git-filter-repo human-verify)
+Resume file: .planning/phases/01-clean-platform-skeleton/01-01-PLAN.md
