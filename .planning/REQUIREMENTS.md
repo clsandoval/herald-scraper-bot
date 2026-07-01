@@ -76,13 +76,34 @@ Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (to be mapped by roadmapper) | — | Pending |
+| PLAT-01 | Phase 1 | Pending |
+| PLAT-02 | Phase 1 | Pending |
+| PLAT-03 | Phase 1 | Pending |
+| PLAT-04 | Phase 1 | Pending |
+| DATA-01 | Phase 2 | Pending |
+| ING-03 | Phase 2 | Pending |
+| QRY-01 | Phase 2 | Pending |
+| QRY-02 | Phase 2 | Pending |
+| QRY-04 | Phase 2 | Pending |
+| DISC-01 | Phase 2 | Pending |
+| DATA-02 | Phase 3 | Pending |
+| ING-01 | Phase 3 | Pending |
+| ING-02 | Phase 3 | Pending |
+| ING-04 | Phase 3 | Pending |
+| ING-05 | Phase 3 | Pending |
+| ING-06 | Phase 3 | Pending |
+| SKILL-01 | Phase 4 | Pending |
+| QRY-03 | Phase 4 | Pending |
+| DATA-03 | Phase 5 | Pending |
+| DATA-04 | Phase 5 | Pending |
+| DATA-05 | Phase 5 | Pending |
+| DISC-02 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 20 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 20 ⚠️
+- v1 requirements: 22 total
+- Mapped to phases: 22 (100%)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-07-01*
-*Last updated: 2026-07-01 after initial definition*
+*Last updated: 2026-07-01 after roadmap creation*
