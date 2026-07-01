@@ -96,7 +96,7 @@ the working tree is secret-clean; and the rewritten history was force-pushed to
 
 ## Accomplishments
 - Legacy Telegram/Lambda/dead code (`bot.py`, `lambda_function.py`, `database.py`, `discord_bot.py`, `functions.py`, `constants.py`, `ability_ids.json`, `requirements.txt`, `text.out`) removed from the working tree via `git rm` — including `functions.py`, which carried the leaked Telegram token at (former) line 94.
-- **Leaked Telegram token scrubbed from ALL git history** (Task 4): `git filter-repo --path functions.py --invert-paths` purged every historical blob of `functions.py`, then `git filter-repo --replace-text` redacted the token literal from the remaining planning-doc blobs that quoted it. Verified: `git log --all -p | grep -c '<token>'` == 0, and `functions.py` has 0 commits in history. `origin` was re-added and the rewritten history force-pushed (`git push origin --force --all`). Token also revoked via @BotFather (user action — the real fix; the scrub is defense-in-depth).
+- **Leaked Telegram token scrubbed from ALL git history** (Task 4): `git filter-repo --path functions.py --invert-paths` purged every historical blob of `functions.py`, then two `git filter-repo --replace-text` passes redacted the token from every remaining doc blob that quoted it. The FIRST `--replace-text` pass covered only the raw `NNNN:AAG...` form and missed a URL-encoded copy (`NNNN%3AAAG...`, `%3A` for `:`) inside a `TG_URL` example string in `.planning/codebase/CONCERNS.md:58` — see Deviation 4. A SECOND `--replace-text` pass covering BOTH forms purged it. Final verification: `git log --all -p | grep -c "<secret-fragment>"` == 0 (the token's secret auth fragment, form-agnostic), working-tree `grep -rn "<secret-fragment>"` across `*.md`/`*.py` returns nothing, and `functions.py` has 0 commits in history. `origin` was re-added and the rewritten history force-pushed (`git push origin --force --all`). Token also revoked via @BotFather (user action — the real fix; the scrub is defense-in-depth). NOTE: the bare public bot-ID number (no `:AAG...` secret) still appears in a few grep-command EXAMPLES in the planning docs (e.g. `grep -c '<botid>...'` in PLAN/RESEARCH verification instructions) — this is the non-sensitive public identifier, not the credential, and is intentionally left so the verification commands remain readable.
 - uv workspace root (`pyproject.toml`) + `daimon-core` package (`packages/core/pyproject.toml`) scaffolded; `uv sync` resolves cleanly and produced `uv.lock`.
 - Copied verbatim from the daimon fork: `db.py`, `health.py`, `logging_setup.py`, `ids.py`, `errors.py` (full error taxonomy, not stubbed — `TurnError`/`DefaultsError`/`SpecError` are hard deps of `turn/`/`ma.py`/`skills/fetch.py`), `ma.py`.
 - Copied the entire `turn/` MA engine (7 files: `__init__.py`, `driver.py`, `gating.py`, `lifecycle.py`, `reducers.py`, `render.py`, `state.py`) verbatim — INERT, no Phase-1 caller, wired in a later phase per D-09.
@@ -110,14 +110,14 @@ the working tree is secret-clean; and the rewritten history was force-pushed to
 
 ## Task Commits
 
-Each task was committed atomically. **NOTE: the Task 4 history rewrite (git filter-repo)
-changed every commit SHA.** Post-rewrite SHAs are listed below; the pre-rewrite SHAs
-(recorded at the checkpoint) were `a6b38ae` (task 1) and `89fa79e` (task 2).
+Each task was committed atomically. **NOTE: the Task 4 history rewrites (`git filter-repo`,
+run three times total — one path-purge + two `--replace-text` passes) changed every commit
+SHA on each run.** Current post-rewrite SHAs are listed below.
 
-1. **Task 1: Delete legacy code and scaffold the uv workspace + daimon-core package (incl. inert turn/ + skills/)** - `b58bf99` (feat) [pre-rewrite: a6b38ae]
-2. **Task 2: Trim config.py to Phase-1 sections + empty models Base, verify uv sync + import smoke (incl. turn/ + skills/)** - `8e910d8` (feat) [pre-rewrite: 89fa79e]
-3. **Task 3: checkpoint:human-verify** — approved by user via coordinator (git-filter-repo legitimacy + token revocation + force-push authorization). No code commit; the halt was recorded in `c034d1d` and the doc redaction in `f76f6ef`.
-4. **Task 4: Install git-filter-repo, scrub functions.py from history, force-push** - no new content commit (a history-rewriting operation, not a working-tree commit). The token-literal redaction of the planning docs was committed as `f76f6ef` before the `--replace-text` history pass; the rewrite + `git push origin --force --all` completed the scrub.
+1. **Task 1: Delete legacy code and scaffold the uv workspace + daimon-core package (incl. inert turn/ + skills/)** - `c5b4ee3` (feat)
+2. **Task 2: Trim config.py to Phase-1 sections + empty models Base, verify uv sync + import smoke (incl. turn/ + skills/)** - `867321a` (feat)
+3. **Task 3: checkpoint:human-verify** — approved by user via coordinator (git-filter-repo legitimacy + token revocation + force-push authorization). No code commit.
+4. **Task 4: Install git-filter-repo, scrub functions.py + token literals from history, force-push** - a history-rewriting operation (no working-tree content commit for the rewrite itself). Working-tree token redactions were committed before each `--replace-text` pass: `810036a` (raw literal in PLAN.md) and the CONCERNS.md URL-encoded-form redaction (folded into the second rewrite). Force-pushed via `git push origin --force --all`.
 
 **Plan metadata commit:** committed after this SUMMARY + STATE.md/ROADMAP.md/REQUIREMENTS.md update.
 
@@ -151,7 +151,7 @@ changed every commit SHA.** Post-rewrite SHAs are listed below; the pre-rewrite 
 - **Fix:** Scoped the pattern to `/env.py` (repo-root only, preserving original intent for the legacy dev script which no longer exists anyway) so the alembic `env.py` is trackable.
 - **Files modified:** `.gitignore`
 - **Verification:** `git check-ignore -v packages/core/alembic/env.py` returns nothing (not ignored); `git add packages/core/alembic/env.py` succeeds; file appears in the Task 1 commit's `--stat`.
-- **Committed in:** Task 1's commit (`b58bf99` post-rewrite; was `a6b38ae`)
+- **Committed in:** Task 1's commit (`c5b4ee3` current post-rewrite SHA)
 
 **2. [Rule 1 - Bug] `.gitignore`'s `__pycache__/*` pattern didn't cover nested package `__pycache__` dirs**
 - **Found during:** Task 2, after `uv run pytest` generated bytecode caches under `packages/core/daimon/core/__pycache__/`, `packages/core/daimon/core/turn/__pycache__/`, `packages/core/daimon/core/skills/__pycache__/`, and `tests/__pycache__/`
@@ -159,20 +159,28 @@ changed every commit SHA.** Post-rewrite SHAs are listed below; the pre-rewrite 
 - **Fix:** Changed the pattern from `__pycache__/*` to `__pycache__/` (matches any directory named `__pycache__` at any depth, ignoring its full contents).
 - **Files modified:** `.gitignore`
 - **Verification:** `git status --short` no longer lists any `__pycache__` path anywhere in the tree as untracked after the fix.
-- **Committed in:** Task 2's commit (`8e910d8` post-rewrite; was `89fa79e`)
+- **Committed in:** Task 2's commit (`867321a` current post-rewrite SHA)
 
 **3. [Rule 1 - Bug / Rule 2 - Security] Leaked token literal quoted verbatim in the planning docs would leave the secret in history after scrubbing `functions.py`**
 - **Found during:** Task 4, after `git filter-repo --path functions.py --invert-paths` — the token grep still returned 2 hits.
 - **Issue:** `01-01-PLAN.md` (and the historical `ROADMAP.md` blob) quoted the leaked token string verbatim — once as the "token to purge" reference and once inside the verify command itself. Purging only `functions.py` from history therefore did NOT fully remove the secret string; the plan's own verify criterion (`grep -c '<token>'` == 0 across all history) could not pass while those doc blobs remained.
-- **Fix:** Redacted the literal from the working-tree `01-01-PLAN.md` (committed as `f76f6ef`), then ran a second `git filter-repo --replace-text` pass mapping the token literal to `REDACTED` across every historical blob.
-- **Files modified:** `.planning/phases/01-clean-platform-skeleton/01-01-PLAN.md` (working tree) + all historical blobs containing the literal (via `--replace-text`).
-- **Verification:** `git log --all -p | grep -c '<token>'` == 0; `grep -c 'REDACTED'` across history == 6 (confirms the replacement landed); working-tree literal scan clean.
-- **Committed in:** `f76f6ef` (working-tree redaction) + the `--replace-text` history rewrite.
+- **Fix:** Redacted the raw literal from the working-tree `01-01-PLAN.md` (committed as `810036a`), then ran a `git filter-repo --replace-text` pass mapping the raw token literal to `REDACTED` across every historical blob.
+- **Files modified:** `.planning/phases/01-clean-platform-skeleton/01-01-PLAN.md` (working tree) + historical blobs containing the raw literal (via `--replace-text`).
+- **Verification:** raw-form `git log --all -p | grep -c '<token>'` == 0 after this pass. (Incomplete — see Deviation 4: a URL-encoded copy survived.)
+- **Committed in:** `810036a` (working-tree redaction) + the first `--replace-text` history rewrite.
+
+**4. [Rule 1 - Bug / Rule 2 - Security] URL-encoded copy of the token survived the first `--replace-text` pass (raw-form-only match)**
+- **Found during:** Post-completion review flagged by the coordinator — the first scrub's `grep -c` used the raw `NNNN:AAG...` form and missed a URL-encoded copy.
+- **Issue:** `.planning/codebase/CONCERNS.md:58` quoted the token in URL-encoded form (`%3A` in place of `:`) inside a `TG_URL = "https://api.telegram.org/bot<token>/sendMessage"` example. The first `--replace-text` replacements file only listed the raw `:`-delimited literal, so the `%3A` variant survived in both the working tree AND one historical blob. The initial "0 occurrences" claim was therefore wrong — it only checked the raw form.
+- **Fix:** Redacted the URL-encoded token in the working-tree `CONCERNS.md` to `***REDACTED-REVOKED-TOKEN***` (committed before the rewrite), then ran a SECOND `git filter-repo --replace-text` pass whose replacements file covered BOTH forms — raw `NNNN:AAG...` and URL-encoded `NNNN%3AAAG...` — extracted programmatically from a historical blob (never typed) so both were purged from every historical blob. Re-added `origin` and force-pushed.
+- **Files modified:** `.planning/codebase/CONCERNS.md` (working tree) + historical blobs (via `--replace-text`).
+- **Verification (form-agnostic, the fix for the flawed first check):** `git log --all -p | grep -c "<secret-fragment>"` (the token's secret auth fragment, matches both forms) == **0**; working-tree `grep -rn "<secret-fragment>" . --include="*.md" --include="*.py"` (excluding `.git`) returns **nothing**; `functions.py` still has 0 commits in history. The bare public bot-ID number remains only in grep-command examples in the docs (non-sensitive, intentional).
+- **Committed in:** working-tree redaction folded into the second `--replace-text` history rewrite; force-pushed via `git push origin --force --all`.
 
 ---
 
-**Total deviations:** 3 auto-fixed (Rule 1/2/3 — blocking correctness + secret-hygiene issues, not scope creep)
-**Impact on plan:** All three fixes were necessary: two `.gitignore` bugs blocked Task 1/2 from committing required files, and the token-in-docs discovery was required for the Task 4 scrub to actually satisfy its own zero-token verify criterion. No architectural changes, no scope creep.
+**Total deviations:** 4 auto-fixed (Rule 1/2/3 — blocking correctness + secret-hygiene issues, not scope creep)
+**Impact on plan:** All four fixes were necessary: two `.gitignore` bugs blocked Task 1/2 from committing required files; the token-in-docs discoveries (raw form, then URL-encoded form) were required for the Task 4 scrub to actually remove the secret from all history. Deviation 4 also corrected a flawed verification (raw-form-only grep) — the scrub is now verified form-agnostically. No architectural changes, no scope creep.
 
 ## Issues Encountered
 - The plan's `files_modified` frontmatter listed `download.html`, which does not exist in this repo's working tree (likely a stale reference from an earlier codebase snapshot in `.planning/codebase/`). `git rm download.html` failed with "did not match any files"; the file was simply skipped — no impact, as it was never present to begin with.
@@ -200,8 +208,12 @@ All required user actions are DONE (approved via coordinator):
 
 ## Self-Check: PASSED
 
-All 25 claimed files verified present (`test -f`); post-rewrite task commit
-hashes (`b58bf99`, `8e910d8`) verified present in `git log --oneline --all`;
+All 25 claimed files verified present (`test -f`); current post-rewrite task
+commit hashes (`c5b4ee3`, `867321a`) verified present in `git log --oneline --all`;
 all 9 legacy files verified absent from the working tree; leaked token verified
-absent from all git history (`git log --all -p | grep -c` == 0); `functions.py`
-verified absent from all history (0 commits); import smoke + 4 config tests pass.
+absent from all git history **form-agnostically** — `git log --all -p | grep -c "<secret-fragment>"`
+== 0 (matches both raw `:` and URL-encoded `%3A` forms) — and working-tree
+`grep -rn "<secret-fragment>" . --include="*.md" --include="*.py"` (excluding `.git`)
+returns nothing; `functions.py` verified absent from all history (0 commits);
+import smoke + 4 config tests pass. (Corrects the prior self-check, which used a
+raw-form-only grep and missed the URL-encoded copy in CONCERNS.md — Deviation 4.)
