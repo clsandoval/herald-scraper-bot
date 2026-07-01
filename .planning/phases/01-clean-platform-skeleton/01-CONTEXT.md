@@ -17,7 +17,7 @@ Covers requirements PLAT-01, PLAT-02, PLAT-03, PLAT-04.
 ### Fork strategy & git history
 - **D-01:** Copy the trimmed daimon subset **into this existing repo** (don't start a fresh repo). Keep the repo, replace its contents.
 - **D-02:** **Scrub git history** with `git filter-repo` to purge the leaked Telegram-token blob — defense-in-depth *on top of* revoking the token (revocation is the real fix; scrub removes the dead trace). This rewrites history and requires a **one-time force-push** to the remote. Safe because prod runs off its Fly machine, not the repo.
-- **D-03:** Work on `main`. Prod (`herald-scraper-bot` Fly app) keeps serving its current running release and is **not redeployed** until the overhaul is explicitly promoted.
+- D-03 *(informational guardrail — not a tracked decision)*: Work on `main`. Prod (`herald-scraper-bot` Fly app) keeps serving its current running release and is **not redeployed** until the overhaul is explicitly promoted. Constrains what plans must NOT do; no task produces it.
 - **D-04:** Trim scope — keep only daimon core (`db`/`models`/`config`/`turn`/`skills`), the Discord adapter, and the scheduler adapter. Remove multi-tenant, MCP, Slack, CLI, billing, provisioning, GitHub-OAuth. Remove legacy files `bot.py`, `lambda_function.py`, `database.py` and other dead code.
 
 ### Deploy target

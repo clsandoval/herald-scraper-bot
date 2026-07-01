@@ -433,9 +433,11 @@ fly secrets set -a herald-scraper-bot-test \
 
 **If this table is empty:** N/A — see above; four items logged.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does "Fly managed Postgres" mean `fly mpg` or `fly postgres create`?**
+> RESOLVED during planning (2026-07-01): Q1 → `fly mpg` (surfaced as a decision checkpoint in plan 01-03). Q2 → scheduler package copied inert, not wired into `fly.toml` processes (plan 01-02). Q3 → empty `Base` for the baseline migration (plan 01-01). All three are handled by the Phase 1 plans.
+
+1. **Does "Fly managed Postgres" mean `fly mpg` or `fly postgres create`?** — RESOLVED: `fly mpg` (checkpoint in 01-03).
    - What we know: D-06 says "Fly managed Postgres (`fly postgres create` + attach)" verbatim, but Fly's current docs recommend `fly mpg` as the managed product and call `fly postgres` "unmanaged."
    - What's unclear: Whether the user meant the specific command or the general concept ("Fly's Postgres offering, whatever it's called now").
    - Recommendation: Default to `fly mpg` (the currently-supported managed product) unless the user has a specific reason to prefer the legacy command (e.g., familiarity, existing tooling). Flag as a quick confirm at plan/execution time, not a blocker.

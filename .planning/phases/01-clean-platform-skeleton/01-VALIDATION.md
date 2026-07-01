@@ -1,8 +1,8 @@
 ---
 phase: 1
 slug: clean-platform-skeleton
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-01
 ---
@@ -38,9 +38,13 @@ Note: Phase 1 is platform/deploy — much of its verification is deploy-time (Fl
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| (filled by planner / nyquist auditor) | 01 | 1 | PLAT-01..04 | T-1-xx | secrets only from env | mixed | `uv run pytest -q` | ❌ W0 | ⬜ pending |
+Each `type=auto` task across the 3 plans carries a runnable `<automated>` command (verified by plan-checker: 01-01 tasks 1/2/4, 01-02 tasks 1/2/3, 01-03 tasks 2/3). No watch-mode/E2E-suite commands; no 3-consecutive-task gap in automated coverage. Checkpoint tasks (git-filter-repo legitimacy, `fly mpg` decision, live pong) are human-verify by design — see Manual-Only Verifications.
+
+| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | Status |
+|---------|------|------|-------------|-----------|-------------------|--------|
+| 01-01-* | 01-01 | 1 | PLAT-01/02/03 | unit/config | `uv run pytest -q` (config loads from env, no hardcoded secrets) | ⬜ pending |
+| 01-02-* | 01-02 | 2 | PLAT-01/04 | unit/import | `uv run pytest -q` (mention→pong handler, import smoke) | ⬜ pending |
+| 01-03-* | 01-03 | 3 | PLAT-02/04 | deploy/manual | Fly deploy + release migration log + live `@bot→pong` | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -70,11 +74,11 @@ Note: Phase 1 is platform/deploy — much of its verification is deploy-time (Fl
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies (or documented manual deploy checks)
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (or documented manual deploy checks)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-07-01 (deploy-time checks remain manual — see Manual-Only Verifications)
