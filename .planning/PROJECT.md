@@ -58,8 +58,8 @@ without ever spamming the channel.
   core (db/models/config/turn/skills), Discord adapter, and the scheduler adapter (reused for
   the ingestion worker). Strip multi-tenant / MCP / Slack / billing / provisioning / OAuth.
 - **Primitives vs knowledge split**: the bot repo holds only *primitives* — Discord adapter,
-  MA turn driver, the read-only SQL **tool**, ingestion worker, DB schema/migrations, and the
-  `hero_norms` recompute job (the math). Everything the agent *knows* — the `herald-replay-quality`
+  MA turn driver, the read-only SQL **tool**, ingestion worker, DB schema/migrations, and a
+  one-off `hero_norms` batch script (the math). Everything the agent *knows* — the `herald-replay-quality`
   scoring rubric, how-to-query-the-DB *strategy*, per-hero "rarity = absurdity" interpretation,
   Dota framing — lives in a **GitHub skill repo** loaded via daimon's skill-fetch, so heuristics
   are tuned by editing the repo (no redeploy). The live DB schema is introspected and injected
@@ -102,7 +102,8 @@ without ever spamming the channel.
 | Bot ranks candidates, human picks | Comedic payload / human-interest angle isn't computable (spike B) | ✓ Decided (spike evidence) |
 | **Agent knowledge lives in a GitHub skill repo; bot code = primitives only** | daimon skills-as-repos pattern: tune heuristics by editing the skill repo, redeploy nothing. Code holds Discord/turn/SQL-tool/ingestion/schema; skill holds scoring rubric, query strategy, Dota framing | ✓ Decided |
 | **Schema is generated into agent context, not authored in the skill** | Bot introspects Postgres and injects live schema at query time; skill stays about *patterns* so it can't drift out of sync with migrations | ✓ Decided |
-| **Per-hero norms derived from the match corpus (rarity = absurdity)** | Self-calibrating + Herald-native (global/pro item tables mislabel Herald norms). `hero_norms` job computes item_freq + GPM percentiles; outlier = rare/extreme *for that hero* | ✓ Decided |
+| **Per-hero norms derived from the match corpus (rarity = absurdity)** | Self-calibrating + Herald-native (global/pro item tables mislabel Herald norms). Computes item_freq + GPM percentiles; outlier = rare/extreme *for that hero* | ✓ Decided |
+| **`hero_norms` = one-off batch, not a recurring job** | Herald per-hero norms are stable; compute once at corpus volume, re-run only on a new Dota patch. No scheduled pipeline | ✓ Decided |
 | Cold-start norms fallback: static hard-hero stub until a hero has enough games | Corpus-derived signals need volume; hero-agnostic signals + `dotaconstants` seed carry early scoring | — Pending |
 
 ## Evolution
