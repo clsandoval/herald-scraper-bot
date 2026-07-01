@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02 (Discord adapter + scheduler stub + baseline migration + deploy config)
-last_updated: "2026-07-01T12:18:30.791Z"
+stopped_at: "Phase 1: Waves 1-2 complete; Wave 3 (live deploy) held pending Anthropic MA key + paid-infra go-ahead"
+last_updated: "2026-07-01T12:40:49.140Z"
 last_activity: 2026-07-01
 progress:
   total_phases: 6
@@ -89,6 +89,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T12:18:30.785Z
-Stopped at: Completed 01-02 (Discord adapter + scheduler stub + baseline migration + deploy config)
-Resume file: None
+Last session: 2026-07-01T12:40:49.133Z
+Stopped at: Phase 1: Waves 1-2 complete; Wave 3 (live deploy) held pending Anthropic MA key + paid-infra go-ahead
+Resume file: .planning/phases/01-clean-platform-skeleton/01-03-PLAN.md
