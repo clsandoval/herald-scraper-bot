@@ -5,6 +5,7 @@ description = "Herald Reviews Scout — trimmed daimon fork, workspace root"
 requires-python = ">=3.12"
 dependencies = [
     "daimon-core",
+    "daimon-adapter-discord",
 ]
 
 [tool.uv.workspace]
@@ -12,6 +13,7 @@ members = ["packages/core", "packages/adapters/*"]
 
 [tool.uv.sources]
 daimon-core = { workspace = true }
+daimon-adapter-discord = { workspace = true }
 
 [tool.ruff]
 line-length = 100
