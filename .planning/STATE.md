@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-01 (legacy purge + daimon-core scaffold + history scrub + force-push)
-last_updated: "2026-07-01T11:56:33.237Z"
-last_activity: 2026-07-01 -- Phase 1 Plan 1 complete (all 4 tasks)
+stopped_at: Completed 01-02 (Discord adapter + scheduler stub + baseline migration + deploy config)
+last_updated: "2026-07-01T12:18:30.791Z"
+last_activity: 2026-07-01
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 2
+  percent: 0
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 ## Current Position
 
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
-Plan: 2 of 3 (plan 01-01 complete)
-Status: Ready to execute plan 01-02
-Last activity: 2026-07-01 -- Phase 1 Plan 1 complete (all 4 tasks)
+Plan: 3 of 3 (plan 01-01 complete)
+Status: Ready to execute
+Last activity: 2026-07-01
 
-Progress: [███░░░░░░░] 33%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███░░░░░░░] 33%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 01 P02 | 45min | 3 tasks | 20 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,9 @@ Recent decisions affecting current work:
 - Pre-Phase 1: Fork `daimon-cma-open-source` trimmed (core + Discord adapter + scheduler adapter only) rather than build fresh
 - Pre-Phase 1: OpenDota for discovery, Stratz GraphQL for enrichment (spike-validated: OD Herald pubs are unparsed, Stratz has the same matches fully parsed)
 - Pre-Phase 1: Bot ranks candidates via the `herald-replay-quality` skill; a human picks the final replay — comedic payload isn't computable
+- [Phase 01-02]: HeraldBot written fresh (not trimmed from daimon's 1170-line bot.py) to avoid orphaned imports across excluded panel/setup modules
+- [Phase 01-02]: Scheduler's main.py is a documented inert stub, not a verbatim copy -- daimon's real file depends on billing/defaults/ma_resolver/headless_runner machinery excluded from this fork
+- [Phase 01-02]: docker-compose services invoke venv binaries directly (alembic, python -m) instead of uv run -- uv run in the read-only runtime image fails trying to write uv.lock
 
 ### Pending Todos
 
@@ -85,6 +89,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-01T11:56:33.232Z
-Stopped at: Completed 01-01-PLAN.md (Task 4 scrub + force-push done)
+Last session: 2026-07-01T12:18:30.785Z
+Stopped at: Completed 01-02 (Discord adapter + scheduler stub + baseline migration + deploy config)
 Resume file: None

@@ -79,7 +79,7 @@ Populated during roadmap creation.
 | PLAT-01 | Phase 1 | Complete |
 | PLAT-02 | Phase 1 | Complete |
 | PLAT-03 | Phase 1 | Complete |
-| PLAT-04 | Phase 1 | Pending |
+| PLAT-04 | Phase 1 | In Progress (buildable/migrating locally — live Fly deploy is 01-03) |
 | DATA-01 | Phase 2 | Pending |
 | ING-03 | Phase 2 | Pending |
 | QRY-01 | Phase 2 | Pending |
