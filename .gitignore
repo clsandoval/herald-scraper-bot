@@ -11,3 +11,4 @@ spikes/menu-v2/out/*.png
 herald.db
 herald.db-wal
 herald.db-shm
+herald-ingest.log
