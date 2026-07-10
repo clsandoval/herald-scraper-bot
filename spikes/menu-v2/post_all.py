@@ -21,7 +21,6 @@ import render
 from post import REPLAYS_CHANNEL, create_thread, post_v2
 
 APPROACHES = [
-    ("a3_browser", "🔎 Herald Match Browser v2", "drill-down kiosk, glance rows"),
     ("a4_board", "🎛️ The Match Board v2", "one message IS the UI, glance rows"),
 ]
 
