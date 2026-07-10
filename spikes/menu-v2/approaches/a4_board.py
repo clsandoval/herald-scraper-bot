@@ -93,6 +93,7 @@ def _nav(page="1/4"):
         {"type": 2, "style": 2, "custom_id": "mb|pp", "label": "◀"},
         {"type": 2, "style": 2, "custom_id": "mb|pn", "label": f"{page} ▶"},
         {"type": 2, "style": 1, "custom_id": "mb|dice", "label": "🎲"},
+        {"type": 2, "style": 2, "custom_id": "mb|adv", "label": "⚙️ Advanced"},
     ]}
 
 
@@ -241,6 +242,38 @@ def full_graph(m):
     ]}], [("nwfull.png", png)]
 
 
+def advanced_modal():
+    """Mock of the native Discord popup the ⚙️ Advanced button opens."""
+    field = lambda label, val: {"type": 10, "content": f"**{label}**\n```\n{val}\n```"}
+    return [{"type": 17, "accent_color": 0x5865F2, "components": [
+        {"type": 10, "content": "## ⚙️ Advanced search"},
+        field("Min duration (minutes)", "90"),
+        field("Min total kills", "90"),
+        field("Heroes (all must be in the match)", "largo, treant"),
+        field("Items (name xCount)", "rapier x2"),
+        {"type": 1, "components": [
+            {"type": 2, "style": 2, "custom_id": "adv|cancel", "label": "Cancel"},
+            {"type": 2, "style": 1, "custom_id": "adv|go", "label": "Search"},
+        ]},
+    ]}]
+
+
+def advanced_results(ms, files):
+    close = sorted(ms, key=lambda m: (-m["kills"], -m["duration"]))[:3]
+    return [{"type": 17, "accent_color": GOLD, "components": [
+        {"type": 10, "content": "## 🎛️ MATCH BOARD\n-# 0 exact matches · showing 3 closest"
+                                "\n-# 90+ min: max this week is 47 · 90+ kills: 12 · Largo+Treant: 0 together · rapier x2: 1"},
+        {"type": 14, "divider": True, "spacing": 1},
+        *[_graph_row(m, files) for m in close],
+        {"type": 14, "divider": True, "spacing": 1},
+        _open_select(close, 3),
+        {"type": 1, "components": [
+            {"type": 2, "style": 2, "custom_id": "adv|edit", "label": "⚙️ Edit search"},
+            {"type": 2, "style": 2, "custom_id": "adv|clear", "label": "✕ Clear"},
+        ]},
+    ]}]
+
+
 def build():
     ms = sorted(render.load_matches(), key=lambda m: -m["kills"])
     pa = next(m for m in ms if m["id"] == 8888295980)
@@ -251,9 +284,14 @@ def build():
     hub_files, filt_files = [], []
     hub = browse_default(ms, hub_files)
     filt = browse_filtered(ms, filt_files)
+    adv_files = []
+    adv = advanced_results(ms, adv_files)
     return [
         {"components": [_state("hub — first thing everyone sees"), *hub], "files": hub_files},
         {"components": [_state("filtered: 15+ death feeder"), *filt], "files": filt_files},
+        {"components": [_state("⚙️ Advanced → native popup (mocked): 90min · 90 kills · largo+treant · rapier x2"),
+                        *advanced_modal()], "files": []},
+        {"components": [_state("submit → board shows result"), *adv], "files": adv_files},
         {"components": [_state("grouped by hero"), *grouped_hero(ms)], "files": []},
         {"components": [_state("grouped by length"), *grouped_length(ms)], "files": []},
         {"components": [_state("match opened"), *f1], "files": f1f},
