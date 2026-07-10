@@ -126,6 +126,35 @@ def load_matches():
     return out
 
 
+# ---------- glance rows: hero icon + KDA + item icons in ONE line ----------
+
+def item_icons(p, n=6):
+    """Inline item emoji strip; missing emojis render as ▫."""
+    return "".join(item_emoji(i) or "▫" for i in p["items"][:n])
+
+
+def player_line(p, stat=""):
+    """`{hero} K/D/A {items}` — THE glance row. stat: optional trailing text."""
+    h = hero_emoji(p["hero_id"]) or f"**{hero_name(p['hero_id'])[:14]}**"
+    tail = f"  {stat}" if stat else ""
+    return f"{h} `{p['k']:>2}/{p['d']:>2}/{p['a']:>2}` {item_icons(p)}{tail}"
+
+
+def star_of(m):
+    """Most glanceworthy player: feeder if extreme, else top fragger."""
+    f = m["feeder"]
+    if f["d"] >= 15:
+        return f
+    return max(m["players"], key=lambda p: p["k"])
+
+
+def match_line(m, star=None):
+    """One-line match row: result/length/kills + the star player's glance row."""
+    s = star or star_of(m)
+    side = "🟢" if m["radiant_win"] else "🔴"
+    return f"{side} `{dur(m['duration'])}` · **{m['kills']}** kills — {player_line(s)}"
+
+
 # ---------- the factoid ladder (judge: "cheapest charm per line") ----------
 
 def factoid(m):

@@ -21,22 +21,16 @@ import render
 from post import REPLAYS_CHANNEL, create_thread, post_v2
 
 APPROACHES = [
-    ("a2_gazette", "🗞️ The Herald Gazette", "weekly newspaper of the worst Dota — judge's pick #1"),
-    ("a3_browser", "🔎 Herald Match Browser", "drill-down kiosk: filters → list → match card — judge's pick #2"),
-    ("a4_board", "🎛️ The Match Board", "one pinned message that IS the whole UI"),
-    ("a1_ledger", "🗃️ The Herald Ledger", "group-by card catalog: pick a shelf, open a drawer"),
-    ("a5_machine", "🎰 The Herald Machine", "slot machine for terrible Dota"),
-    ("a0_reel", "🎬 The Herald Reel", "poster-wall movie catalog"),
+    ("a3_browser", "🔎 Herald Match Browser v2", "drill-down kiosk, glance rows"),
+    ("a4_board", "🎛️ The Match Board v2", "one message IS the UI, glance rows"),
 ]
 
 INTRO = [{"type": 17, "accent_color": 0x3BA55D, "components": [
-    {"type": 10, "content": "## 📋 Herald menu spike — 6 approaches, real data"},
+    {"type": 10, "content": "## 📋 Menu spike v2 — Browser vs Board, glance-row edition"},
     {"type": 10, "content": (
-        "Six ways to browse a week of Herald matches, mocked with **38 real matches "
-        "pulled today** (real kills, real feeders, real net-worth graphs, current "
-        "items/heroes). One thread per approach — controls are visual mockups, "
-        "not wired yet.\n\nJudge's ranking: **Gazette** > **Browser** > Board > "
-        "Ledger/Machine/Reel — final plan in the last message."
+        "Two finalists, rebuilt around one rule: **every row shows hero icon + "
+        "K/D/A + item icons on the same line.** Real matches from today. "
+        "Controls still visual-only — we're iterating on feel."
     )},
 ]}]
 
