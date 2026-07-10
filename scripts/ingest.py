@@ -27,10 +27,15 @@ log = logging.getLogger("ingest")
 # --- CONSTANTS ---
 
 OD_URL = "https://api.opendota.com/api/publicMatches"
+EXPLORER_URL = "https://api.opendota.com/api/explorer"
 STRATZ_URL = "https://api.stratz.com/graphql"
 RAPIER_ID = 133
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
+# ponytail: Explorer shows ~32k Herald matches/day but Stratz free tier enriches
+# 15k/day max — backfill subsamples evenly down to this target. Raise it (and
+# wait longer) if the board needs more depth.
+BACKFILL_TARGET = int(os.environ.get("BACKFILL_TARGET", "15000"))
 DB_PATH = os.environ.get("HERALD_DB", "herald.db")
 
 STRATZ_QUERY = """
@@ -56,6 +61,7 @@ query($id: Long!) {
 
 def init_db(conn):
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # backfill + loop share the db
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS matches (
@@ -267,9 +273,92 @@ def discover(conn):
     return new
 
 
+# --- OD EXPLORER (backfill discovery) ---
+
+def explorer_fetch(client, sql):
+    """OpenDota Explorer SQL. Needs an explicit User-Agent (default UA gets 403)."""
+    params = {"sql": sql}
+    headers = {"User-Agent": "herald-scraper-bot"}
+    for _attempt in range(4):
+        try:
+            resp = client.get(EXPLORER_URL, params=params, headers=headers)
+        except Exception as e:
+            log.warning(f"explorer_fetch exception: {e}, retrying")
+            time.sleep(5)
+            continue
+        if resp.status_code == 429:
+            log.warning("explorer_fetch 429, sleeping 10s")
+            time.sleep(10)
+            continue
+        if resp.status_code >= 500:
+            log.warning(f"explorer_fetch {resp.status_code}, retrying")
+            time.sleep(5)
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("err"):
+            log.warning(f"explorer_fetch sql error: {data['err']}, retrying")
+            time.sleep(5)
+            continue
+        return data.get("rows") or []
+    return None
+
+
+def backfill(conn, days):
+    """One-time depth fill: keyset-paginate Explorer's public_matches (PK index
+    walk — start_time range scans time out server-side) back `days` days, then
+    subsample evenly to BACKFILL_TARGET and queue for enrichment."""
+    now = int(time.time())
+    cutoff = now - days * 86400
+    pre = {r[0] for r in conn.execute("SELECT match_id FROM matches").fetchall()}
+    pre |= {r[0] for r in conn.execute("SELECT match_id FROM pending").fetchall()}
+    found = []
+    last = None
+    with httpx.Client(timeout=120) as client:
+        while True:
+            frontier = f"AND match_id < {int(last)} " if last else ""
+            rows = explorer_fetch(
+                client,
+                "SELECT match_id, start_time, avg_rank_tier FROM public_matches "
+                f"WHERE avg_rank_tier BETWEEN 10 AND 15 {frontier}"
+                "ORDER BY match_id DESC LIMIT 1000",
+            )
+            if rows is None:
+                log.warning(f"backfill: explorer gave up at {len(found)} rows, using what we have")
+                break
+            if not rows:
+                break
+            found.extend(r for r in rows if r["start_time"] >= cutoff)
+            oldest = min(r["start_time"] for r in rows)
+            last = min(r["match_id"] for r in rows)
+            log.info(f"backfill: {len(found)} ids, at {(now - oldest) / 86400:.1f} days back")
+            if oldest < cutoff:
+                break
+            time.sleep(1.1)
+    step = max(1, len(found) // BACKFILL_TARGET)
+    sample = found[::step][:BACKFILL_TARGET]
+    queued = 0
+    for r in sample:
+        if r["match_id"] in pre:
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO pending("
+            "match_id,avg_rank_tier,start_time,discovered_at,attempts,last_attempt"
+            ") VALUES(?,?,?,?,0,NULL)",
+            (r["match_id"], r["avg_rank_tier"], r["start_time"], now - 200),
+        )
+        queued += 1
+    conn.commit()
+    log.info(f"backfill: found {len(found)}, sampled 1/{step}, queued {queued} for enrichment")
+    return queued
+
+
 # --- STRATZ HTTP ---
 
 def stratz_fetch(client, match_id):
+    """Returns the match dict, None (not ready / not found), or the string
+    "RATELIMIT" when Stratz's daily cap is hit — callers must not count that
+    as a failed attempt."""
     tok = os.environ.get("STRATZ_API_TOKEN")
     if not tok:
         raise RuntimeError("STRATZ_API_TOKEN not set")
@@ -291,7 +380,7 @@ def stratz_fetch(client, match_id):
         if data.get("errors"):
             log.warning(f"stratz_fetch errors: {data['errors']}")
         return (data.get("data") or {}).get("match")
-    return None
+    return "RATELIMIT"  # 3x 429 in a row = daily/minute cap, not a bad match
 
 
 # --- ENRICHMENT ---
@@ -309,6 +398,9 @@ def enrich(conn):
     with httpx.Client(timeout=30) as client:
         for mid, art in rows:
             m = stratz_fetch(client, mid)
+            if m == "RATELIMIT":
+                log.warning("enrich: stratz capped/unreachable — ending cycle, no attempts burned")
+                break
             ready = bool(m) and bool(m.get("radiantNetworthLeads"))
             if ready:
                 upsert_match(conn, m, art)
@@ -341,7 +433,9 @@ def prune(conn):
     old = [r[0] for r in q.fetchall()]
     conn.executemany("DELETE FROM match_players WHERE match_id=?", [(x,) for x in old])
     conn.execute("DELETE FROM matches WHERE start_time < ?", (cutoff,))
-    conn.execute("DELETE FROM pending WHERE discovered_at < ?", (now - 2 * 86400,))
+    # ponytail: RETENTION_DAYS not 2 days — a backfilled queue can take days to
+    # drain against Stratz's 15k/day cap and must not be pruned mid-drain
+    conn.execute("DELETE FROM pending WHERE discovered_at < ?", (cutoff,))
     conn.commit()
     return len(old)
 
@@ -424,12 +518,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--selfcheck", action="store_true")
     parser.add_argument("--loop", nargs="?", const=180, type=int, default=None)
+    parser.add_argument("--backfill", nargs="?", const=RETENTION_DAYS, type=int, default=None,
+                        metavar="DAYS", help="queue DAYS of history via OD Explorer SQL, then exit")
     args = parser.parse_args()
 
     if args.selfcheck:
         sys.exit(selfcheck())
 
     conn = get_conn()
+    if args.backfill is not None:
+        backfill(conn, args.backfill)
+        return
     if args.loop is not None:
         while True:
             try:
