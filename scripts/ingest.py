@@ -43,18 +43,15 @@ def dur_boring(seconds):
     return DUR_SKIP_LO <= seconds <= DUR_SKIP_HI
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
-# ponytail: Explorer shows ~32k Herald matches/day but Stratz free tier enriches
-# 15k/day max — backfill subsamples evenly down to this target. Raise it (and
-# wait longer) if the board needs more depth.
-BACKFILL_TARGET = int(os.environ.get("BACKFILL_TARGET", "15000"))
 # ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
 # Default leaves ~1/3 of the quota for anything else using the token.
 STRATZ_DAILY_BUDGET = int(os.environ.get("STRATZ_DAILY_BUDGET", "10000"))
 DB_PATH = os.environ.get("HERALD_DB", "herald.db")
 
-STRATZ_QUERY = """
-query($id: Long!) {
-  match(id: $id) {
+# One aliased request fetches STRATZ_BATCH full matches and costs exactly ONE
+# rate-limit unit (verified live 2026-07-10: 25 aliases, day counter -1).
+STRATZ_BATCH = int(os.environ.get("STRATZ_BATCH", "25"))
+STRATZ_FIELDS = """
     id durationSeconds startDateTime didRadiantWin gameMode rank bracket
     radiantKills direKills radiantNetworthLeads radiantExperienceLeads
     topLaneOutcome midLaneOutcome bottomLaneOutcome
@@ -66,8 +63,6 @@ query($id: Long!) {
       backpack0Id backpack1Id backpack2Id neutral0Id
       stats { networthPerMinute itemPurchases { time itemId } }
     }
-  }
-}
 """
 
 
@@ -368,10 +363,8 @@ def backfill(conn, days):
             if oldest < cutoff:
                 break
             time.sleep(1.1)
-    step = max(1, len(found) // BACKFILL_TARGET)
-    sample = found[::step][:BACKFILL_TARGET]
     queued = 0
-    for r in sample:
+    for r in found:
         if r["match_id"] in pre:
             continue
         conn.execute(
@@ -382,38 +375,40 @@ def backfill(conn, days):
         )
         queued += 1
     conn.commit()
-    log.info(f"backfill: found {len(found)}, sampled 1/{step}, queued {queued} for enrichment")
+    log.info(f"backfill: found {len(found)}, queued {queued} for enrichment")
     return queued
 
 
 # --- STRATZ HTTP ---
 
-def stratz_fetch(client, match_id):
-    """Returns the match dict, None (not ready / not found), or the string
-    "RATELIMIT" when Stratz's daily cap is hit — callers must not count that
-    as a failed attempt."""
+def stratz_fetch_batch(client, ids):
+    """One aliased request for up to STRATZ_BATCH matches. Returns
+    {match_id: match_or_None}, or the string "RATELIMIT" when Stratz's cap is
+    hit — callers must not count that as failed attempts."""
     tok = os.environ.get("STRATZ_API_TOKEN")
     if not tok:
         raise RuntimeError("STRATZ_API_TOKEN not set")
     headers = {"Authorization": f"Bearer {tok.strip()}", "User-Agent": "STRATZ_API"}
-    body = {"query": STRATZ_QUERY, "variables": {"id": match_id}}
+    parts = [f"m{i}: match(id: {int(mid)}) {{ {STRATZ_FIELDS} }}" for i, mid in enumerate(ids)]
+    body = {"query": "query { " + " ".join(parts) + " }"}
     for _attempt in range(3):
         try:
             resp = client.post(STRATZ_URL, json=body, headers=headers)
         except Exception as e:
-            log.warning(f"stratz_fetch exception: {e}, retrying")
+            log.warning(f"stratz_fetch_batch exception: {e}, retrying")
             time.sleep(3)
             continue
         if resp.status_code == 429:
-            log.warning("stratz_fetch 429, sleeping 30s")
+            log.warning("stratz_fetch_batch 429, sleeping 30s")
             time.sleep(30)
             continue
         resp.raise_for_status()
         data = resp.json()
         if data.get("errors"):
-            log.warning(f"stratz_fetch errors: {data['errors']}")
-        return (data.get("data") or {}).get("match")
-    return "RATELIMIT"  # 3x 429 in a row = daily/minute cap, not a bad match
+            log.warning(f"stratz_fetch_batch errors: {str(data['errors'])[:200]}")
+        d = data.get("data") or {}
+        return {mid: d.get(f"m{i}") for i, mid in enumerate(ids)}
+    return "RATELIMIT"  # 3x 429 in a row = daily/minute cap, not bad matches
 
 
 # --- ENRICHMENT ---
@@ -428,47 +423,52 @@ def enrich(conn):
     failed = 0
     dropped = 0
     cut = 0
-    budget = stratz_budget_left(conn)
+    budget = stratz_budget_left(conn)  # in requests; each request = STRATZ_BATCH matches
     if budget <= 0:
         log.info("enrich: stratz daily budget spent, skipping until tomorrow UTC")
         return 0, 0, 0, 0
+    # ponytail: 200 requests/cycle keeps a cycle under ~3 min; raise to drain faster
+    n_req = min(200, budget)
     rows = conn.execute(
         "SELECT match_id, avg_rank_tier FROM pending WHERE discovered_at < ? AND attempts < 8 "
         "ORDER BY discovered_at ASC LIMIT ?",
-        (now - 180, min(120, budget)),
+        (now - 180, n_req * STRATZ_BATCH),
     ).fetchall()
-    with httpx.Client(timeout=30) as client:
-        for mid, art in rows:
-            m = stratz_fetch(client, mid)
+    with httpx.Client(timeout=120) as client:
+        for i in range(0, len(rows), STRATZ_BATCH):
+            chunk = rows[i:i + STRATZ_BATCH]
+            res = stratz_fetch_batch(client, [mid for mid, _ in chunk])
             stratz_spend(conn, 1)
-            if m == "RATELIMIT":
+            if res == "RATELIMIT":
                 log.warning("enrich: stratz capped/unreachable — ending cycle, no attempts burned")
+                conn.commit()
                 break
-            ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-            # abandons + mid-length games are both cut here; discovery already
-            # skips boring durations, this catches rows queued before the filter
-            if ready and (has_abandon(m) or dur_boring(m["durationSeconds"])):
-                conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
-                cut += 1
-            elif ready:
-                upsert_match(conn, m, art)
-                conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
-                enriched += 1
-            else:
-                conn.execute(
-                    "UPDATE pending SET attempts=attempts+1, last_attempt=? WHERE match_id=?",
-                    (now, mid),
-                )
-                att = conn.execute(
-                    "SELECT attempts FROM pending WHERE match_id=?", (mid,)
-                ).fetchone()[0]
-                if att >= 8:
+            for mid, art in chunk:
+                m = res.get(mid)
+                ready = bool(m) and bool(m.get("radiantNetworthLeads"))
+                # abandons + mid-length games are both cut here; discovery already
+                # skips boring durations, this catches rows queued before the filter
+                if ready and (has_abandon(m) or dur_boring(m["durationSeconds"])):
                     conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
-                    dropped += 1
-                    log.info(f"dropped {mid} after {att} attempts")
-                failed += 1
+                    cut += 1
+                elif ready:
+                    upsert_match(conn, m, art)
+                    conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
+                    enriched += 1
+                else:
+                    conn.execute(
+                        "UPDATE pending SET attempts=attempts+1, last_attempt=? WHERE match_id=?",
+                        (now, mid),
+                    )
+                    att = conn.execute(
+                        "SELECT attempts FROM pending WHERE match_id=?", (mid,)
+                    ).fetchone()[0]
+                    if att >= 8:
+                        conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
+                        dropped += 1
+                    failed += 1
             conn.commit()
-            time.sleep(0.6)  # under Stratz 150/min
+            time.sleep(0.6)  # well under Stratz 150 req/min
     return enriched, failed, dropped, cut
 
 
