@@ -6,3 +6,8 @@ __pycache__/
 
 # spike scratch output (charts, post records regenerate)
 spikes/menu-v2/out/*.png
+
+# herald ingest runtime db (scripts/ingest.py)
+herald.db
+herald.db-wal
+herald.db-shm
