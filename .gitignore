@@ -12,3 +12,4 @@ herald.db
 herald.db-wal
 herald.db-shm
 herald-ingest.log
+herald-backfill.log
