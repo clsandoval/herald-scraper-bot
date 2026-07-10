@@ -202,7 +202,8 @@ def upsert_match(conn, raw, avg_rank_tier):
 
 def load_matches(conn, where="", params=()):
     """The board imports THIS. Returns match_view dicts, newest first."""
-    sql = "SELECT raw FROM matches" + (f" WHERE {where}" if where else "") + " ORDER BY start_time DESC"
+    sql = "SELECT raw FROM matches" + (f" WHERE {where}" if where else "")
+    sql += " ORDER BY start_time DESC"
     rows = conn.execute(sql, params).fetchall()
     return [match_view(json.loads(r[0])) for r in rows]
 
@@ -211,7 +212,7 @@ def load_matches(conn, where="", params=()):
 
 def od_fetch(client, less_than):
     params = {"less_than_match_id": less_than} if less_than else {}
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
             resp = client.get(OD_URL, params=params)
         except Exception as e:
@@ -241,7 +242,7 @@ def discover(conn):
     new = 0
     now = int(time.time())
     with httpx.Client(timeout=30) as client:
-        for page_i in range(MAX_PAGES):
+        for _page in range(MAX_PAGES):
             rows = od_fetch(client, less_than)
             if not rows:
                 break
@@ -274,7 +275,7 @@ def stratz_fetch(client, match_id):
         raise RuntimeError("STRATZ_API_TOKEN not set")
     headers = {"Authorization": f"Bearer {tok.strip()}", "User-Agent": "STRATZ_API"}
     body = {"query": STRATZ_QUERY, "variables": {"id": match_id}}
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             resp = client.post(STRATZ_URL, json=body, headers=headers)
         except Exception as e:
@@ -336,10 +337,8 @@ def enrich(conn):
 def prune(conn):
     now = int(time.time())
     cutoff = now - RETENTION_DAYS * 86400
-    old = [
-        r[0]
-        for r in conn.execute("SELECT match_id FROM matches WHERE start_time < ?", (cutoff,)).fetchall()
-    ]
+    q = conn.execute("SELECT match_id FROM matches WHERE start_time < ?", (cutoff,))
+    old = [r[0] for r in q.fetchall()]
     conn.executemany("DELETE FROM match_players WHERE match_id=?", [(x,) for x in old])
     conn.execute("DELETE FROM matches WHERE start_time < ?", (cutoff,))
     conn.execute("DELETE FROM pending WHERE discovered_at < ?", (now - 2 * 86400,))
@@ -369,7 +368,8 @@ def selfcheck():
         fixture_path = os.path.join(
             os.path.dirname(__file__), "..", "spikes", "menu-v2", "fixtures", "herald_matches.json"
         )
-        data = json.load(open(fixture_path))
+        with open(fixture_path) as f:
+            data = json.load(f)
         od_map = {r["match_id"]: r for r in data.get("od_rows", [])}
         conn = get_conn(":memory:")
         for raw in data["matches"]:
@@ -382,8 +382,8 @@ def selfcheck():
 
         raw0 = data["matches"][0]
         expect_kills = sum(raw0.get("radiantKills") or []) + sum(raw0.get("direKills") or [])
-        row = conn.execute("SELECT kills, comeback_gold FROM matches WHERE match_id=?", (raw0["id"],)).fetchone()
-        stored_kills, stored_comeback = row
+        q = conn.execute("SELECT kills, comeback_gold FROM matches WHERE match_id=?", (raw0["id"],))
+        stored_kills, stored_comeback = q.fetchone()
         assert stored_kills == expect_kills, f"kills mismatch: {stored_kills} != {expect_kills}"
 
         leads0 = raw0.get("radiantNetworthLeads") or [0]
