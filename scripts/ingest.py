@@ -37,10 +37,16 @@ LEAVER_OK = {None, "NONE", "DISCONNECTED"}
 # stomps (<30) and the marathon disasters (>60).
 DUR_SKIP_LO = int(os.environ.get("DUR_SKIP_LO", "1800"))
 DUR_SKIP_HI = int(os.environ.get("DUR_SKIP_HI", "3600"))
+KPM_MIN = float(os.environ.get("KPM_MIN", "1.0"))
 
 
 def dur_boring(seconds):
     return DUR_SKIP_LO <= seconds <= DUR_SKIP_HI
+
+
+def low_kpm(m):
+    kills = sum(m.get("radiantKills") or []) + sum(m.get("direKills") or [])
+    return kills / max(m["durationSeconds"] / 60, 1) < KPM_MIN
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
 # ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
@@ -446,9 +452,9 @@ def enrich(conn):
             for mid, art in chunk:
                 m = res.get(mid)
                 ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-                # abandons + mid-length games are both cut here; discovery already
-                # skips boring durations, this catches rows queued before the filter
-                if ready and (has_abandon(m) or dur_boring(m["durationSeconds"])):
+                # cut = abandons, mid-length games, low kill density. duration is
+                # also pre-filtered at discovery; kpm/abandon only exist here
+                if ready and (has_abandon(m) or dur_boring(m["durationSeconds"]) or low_kpm(m)):
                     conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
                     cut += 1
                 elif ready:
