@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
 Plan: 3 of 3 (plan 01-01 complete)
 Status: Ready to execute
-Last activity: 2026-07-01
+Last activity: 2026-07-10 - Completed quick task 260710-by5: Herald match ingest script (OpenDota → Stratz → SQLite)
 
 Progress: [███████░░░] 67%
 
@@ -76,6 +76,12 @@ Recent decisions affecting current work:
 
 - RESOLVED (01-01): Leaked Telegram bot token revoked via @BotFather and scrubbed from all git history (git filter-repo + force-push). Zero token occurrences remain in history.
 - Phase 5: Skill scoring signals used in Phase 4 will be based on summary-only data until Phase 5 lands richer per-player/net-worth-lead data — expect Phase 4 skill output to sharpen after Phase 5
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260710-by5 | Herald match ingest script: OpenDota discovery → Stratz enrichment → local SQLite, 10-day retention | 2026-07-10 | e5385af | [260710-by5-herald-match-ingest-script-opendota-disc](./quick/260710-by5-herald-match-ingest-script-opendota-disc/) |
 
 ## Deferred Items
 
