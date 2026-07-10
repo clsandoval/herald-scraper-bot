@@ -39,6 +39,9 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
 # 15k/day max — backfill subsamples evenly down to this target. Raise it (and
 # wait longer) if the board needs more depth.
 BACKFILL_TARGET = int(os.environ.get("BACKFILL_TARGET", "15000"))
+# ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
+# Default leaves ~1/3 of the quota for anything else using the token.
+STRATZ_DAILY_BUDGET = int(os.environ.get("STRATZ_DAILY_BUDGET", "10000"))
 DB_PATH = os.environ.get("HERALD_DB", "herald.db")
 
 STRATZ_QUERY = """
@@ -93,7 +96,23 @@ def init_db(conn):
           discovered_at INTEGER, attempts INTEGER DEFAULT 0, last_attempt INTEGER)
         """
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS stratz_calls (day TEXT PRIMARY KEY, calls INTEGER)")
     conn.commit()
+
+
+def stratz_budget_left(conn):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    row = conn.execute("SELECT calls FROM stratz_calls WHERE day=?", (day,)).fetchone()
+    return STRATZ_DAILY_BUDGET - (row[0] if row else 0)
+
+
+def stratz_spend(conn, n):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    conn.execute(
+        "INSERT INTO stratz_calls(day, calls) VALUES(?,?) "
+        "ON CONFLICT(day) DO UPDATE SET calls = calls + ?",
+        (day, n, n),
+    )
 
 
 def get_conn(path=DB_PATH):
@@ -398,14 +417,19 @@ def enrich(conn):
     failed = 0
     dropped = 0
     abandons = 0
+    budget = stratz_budget_left(conn)
+    if budget <= 0:
+        log.info("enrich: stratz daily budget spent, skipping until tomorrow UTC")
+        return 0, 0, 0, 0
     rows = conn.execute(
         "SELECT match_id, avg_rank_tier FROM pending WHERE discovered_at < ? AND attempts < 8 "
-        "ORDER BY discovered_at ASC LIMIT 120",
-        (now - 180,),
+        "ORDER BY discovered_at ASC LIMIT ?",
+        (now - 180, min(120, budget)),
     ).fetchall()
     with httpx.Client(timeout=30) as client:
         for mid, art in rows:
             m = stratz_fetch(client, mid)
+            stratz_spend(conn, 1)
             if m == "RATELIMIT":
                 log.warning("enrich: stratz capped/unreachable — ending cycle, no attempts burned")
                 break
