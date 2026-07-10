@@ -30,6 +30,9 @@ OD_URL = "https://api.opendota.com/api/publicMatches"
 EXPLORER_URL = "https://api.opendota.com/api/explorer"
 STRATZ_URL = "https://api.stratz.com/graphql"
 RAPIER_ID = 133
+# NONE = played through; DISCONNECTED = brief dc but returned (game still valid).
+# Anything else (ABANDONED, AFK, NEVER_CONNECTED*, DISCONNECTED_TOO_LONG) = abandon.
+LEAVER_OK = {None, "NONE", "DISCONNECTED"}
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
 # ponytail: Explorer shows ~32k Herald matches/day but Stratz free tier enriches
@@ -46,7 +49,7 @@ query($id: Long!) {
     topLaneOutcome midLaneOutcome bottomLaneOutcome
     towerDeaths { time isRadiant }
     players {
-      heroId isRadiant kills deaths assists networth goldPerMinute
+      heroId isRadiant leaverStatus kills deaths assists networth goldPerMinute
       experiencePerMinute numLastHits numDenies lane role position
       item0Id item1Id item2Id item3Id item4Id item5Id
       backpack0Id backpack1Id backpack2Id neutral0Id
@@ -385,11 +388,16 @@ def stratz_fetch(client, match_id):
 
 # --- ENRICHMENT ---
 
+def has_abandon(m):
+    return any(p.get("leaverStatus") not in LEAVER_OK for p in m.get("players") or [])
+
+
 def enrich(conn):
     now = int(time.time())
     enriched = 0
     failed = 0
     dropped = 0
+    abandons = 0
     rows = conn.execute(
         "SELECT match_id, avg_rank_tier FROM pending WHERE discovered_at < ? AND attempts < 8 "
         "ORDER BY discovered_at ASC LIMIT 120",
@@ -402,7 +410,10 @@ def enrich(conn):
                 log.warning("enrich: stratz capped/unreachable — ending cycle, no attempts burned")
                 break
             ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-            if ready:
+            if ready and has_abandon(m):
+                conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
+                abandons += 1
+            elif ready:
                 upsert_match(conn, m, art)
                 conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
                 enriched += 1
@@ -421,7 +432,7 @@ def enrich(conn):
                 failed += 1
             conn.commit()
             time.sleep(0.6)  # under Stratz 150/min
-    return enriched, failed, dropped
+    return enriched, failed, dropped, abandons
 
 
 # --- PRUNE ---
@@ -444,13 +455,13 @@ def prune(conn):
 
 def cycle(conn):
     n_disc = discover(conn)
-    n_enr, n_fail, n_drop = enrich(conn)
+    n_enr, n_fail, n_drop, n_aband = enrich(conn)
     n_prune = prune(conn)
     mtot = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
     ptot = conn.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
     log.info(
-        f"cycle: discovered {n_disc}, enriched {n_enr}, not-ready {n_fail}, "
-        f"dropped {n_drop}, pruned {n_prune} | matches={mtot} pending={ptot}"
+        f"cycle: discovered {n_disc}, enriched {n_enr}, abandons {n_aband}, "
+        f"not-ready {n_fail}, dropped {n_drop}, pruned {n_prune} | matches={mtot} pending={ptot}"
     )
 
 
