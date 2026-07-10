@@ -3,3 +3,6 @@ test.py
 __pycache__/
 .env
 .venv/
+
+# spike scratch output (charts, post records regenerate)
+spikes/menu-v2/out/*.png
