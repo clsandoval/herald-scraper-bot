@@ -26,7 +26,6 @@ log = logging.getLogger("ingest")
 
 # --- CONSTANTS ---
 
-OD_URL = "https://api.opendota.com/api/publicMatches"
 EXPLORER_URL = "https://api.opendota.com/api/explorer"
 STRATZ_URL = "https://api.stratz.com/graphql"
 RAPIER_ID = 133
@@ -47,7 +46,7 @@ def dur_boring(seconds):
 def low_kpm(m):
     kills = sum(m.get("radiantKills") or []) + sum(m.get("direKills") or [])
     return kills / max(m["durationSeconds"] / 60, 1) < KPM_MIN
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "400"))  # safety cap on an Explorer walk
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
 # ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
 # Default leaves ~1/3 of the quota for anything else using the token.
@@ -245,68 +244,7 @@ def load_matches(conn, where="", params=()):
     return [match_view(json.loads(r[0])) for r in rows]
 
 
-# --- OD HTTP ---
-
-def od_fetch(client, less_than):
-    params = {"less_than_match_id": less_than} if less_than else {}
-    for _attempt in range(5):
-        try:
-            resp = client.get(OD_URL, params=params)
-        except Exception as e:
-            log.warning(f"od_fetch exception: {e}, retrying")
-            time.sleep(3)
-            continue
-        if resp.status_code == 429:
-            log.warning("od_fetch 429, sleeping 10s")
-            time.sleep(10)
-            continue
-        if resp.status_code >= 500:
-            log.warning(f"od_fetch {resp.status_code}, retrying")
-            time.sleep(3)
-            continue
-        resp.raise_for_status()
-        return resp.json()
-    return []
-
-
-# --- DISCOVERY ---
-
-def discover(conn):
-    pre = {r[0] for r in conn.execute("SELECT match_id FROM matches").fetchall()}
-    pre |= {r[0] for r in conn.execute("SELECT match_id FROM pending").fetchall()}
-    seen_new = set()
-    less_than = None
-    new = 0
-    now = int(time.time())
-    with httpx.Client(timeout=30) as client:
-        for _page in range(MAX_PAGES):
-            rows = od_fetch(client, less_than)
-            if not rows:
-                break
-            page_ids = [m["match_id"] for m in rows]
-            novel = [m for m in rows if m["match_id"] not in pre and m["match_id"] not in seen_new]
-            for m in novel:
-                seen_new.add(m["match_id"])
-                rt = m.get("avg_rank_tier")
-                if dur_boring(m.get("duration") or 0):
-                    continue
-                if rt is not None and 10 <= rt <= 15:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO pending("
-                        "match_id,avg_rank_tier,start_time,discovered_at,attempts,last_attempt"
-                        ") VALUES(?,?,?,?,0,NULL)",
-                        (m["match_id"], rt, m.get("start_time"), now),
-                    )
-                    new += 1
-            conn.commit()
-            if not novel:  # full page yielded only already-known ids -> reached frontier
-                break
-            less_than = min(page_ids)
-            time.sleep(1.1)
-    return new
-
-
-# --- OD EXPLORER (backfill discovery) ---
+# --- OD EXPLORER (discovery) ---
 
 def explorer_fetch(client, sql):
     """OpenDota Explorer SQL. Needs an explicit User-Agent (default UA gets 403)."""
@@ -337,18 +275,19 @@ def explorer_fetch(client, sql):
     return None
 
 
-def backfill(conn, days):
-    """One-time depth fill: keyset-paginate Explorer's public_matches (PK index
-    walk — start_time range scans time out server-side) back `days` days, then
-    subsample evenly to BACKFILL_TARGET and queue for enrichment."""
+def discover(conn, days=RETENTION_DAYS):
+    """Exhaustive discovery: keyset-paginate Explorer's public_matches (PK index
+    walk — start_time range scans time out server-side) newest-first, rank +
+    duration filtered in SQL. Stops at `days` back, at a fully-known page (the
+    frontier — everything older is already discovered), or at MAX_PAGES."""
     now = int(time.time())
     cutoff = now - days * 86400
     pre = {r[0] for r in conn.execute("SELECT match_id FROM matches").fetchall()}
     pre |= {r[0] for r in conn.execute("SELECT match_id FROM pending").fetchall()}
-    found = []
+    queued = 0
     last = None
     with httpx.Client(timeout=120) as client:
-        while True:
+        for _page in range(MAX_PAGES):
             frontier = f"AND match_id < {int(last)} " if last else ""
             rows = explorer_fetch(
                 client,
@@ -358,30 +297,30 @@ def backfill(conn, days):
                 "ORDER BY match_id DESC LIMIT 1000",
             )
             if rows is None:
-                log.warning(f"backfill: explorer gave up at {len(found)} rows, using what we have")
+                log.warning(f"discover: explorer gave up after {queued} queued, using what we have")
                 break
             if not rows:
                 break
-            found.extend(r for r in rows if r["start_time"] >= cutoff)
+            novel = [r for r in rows if r["match_id"] not in pre and r["start_time"] >= cutoff]
+            for r in novel:
+                pre.add(r["match_id"])
+                conn.execute(
+                    "INSERT OR IGNORE INTO pending("
+                    "match_id,avg_rank_tier,start_time,discovered_at,attempts,last_attempt"
+                    ") VALUES(?,?,?,?,0,NULL)",
+                    (r["match_id"], r["avg_rank_tier"], r["start_time"], now),
+                )
+                queued += 1
+            conn.commit()
             oldest = min(r["start_time"] for r in rows)
-            last = min(r["match_id"] for r in rows)
-            log.info(f"backfill: {len(found)} ids, at {(now - oldest) / 86400:.1f} days back")
-            if oldest < cutoff:
+            # ponytail: a 100%-known page = frontier reached; the rare straggler
+            # ingested out of order beyond it is lost, acceptable
+            if oldest < cutoff or not novel:
                 break
+            last = min(r["match_id"] for r in rows)
+            if queued and queued % 5000 < len(novel):
+                log.info(f"discover: {queued} queued, at {(now - oldest) / 86400:.1f} days back")
             time.sleep(1.1)
-    queued = 0
-    for r in found:
-        if r["match_id"] in pre:
-            continue
-        conn.execute(
-            "INSERT OR IGNORE INTO pending("
-            "match_id,avg_rank_tier,start_time,discovered_at,attempts,last_attempt"
-            ") VALUES(?,?,?,?,0,NULL)",
-            (r["match_id"], r["avg_rank_tier"], r["start_time"], now - 200),
-        )
-        queued += 1
-    conn.commit()
-    log.info(f"backfill: found {len(found)}, queued {queued} for enrichment")
     return queued
 
 
@@ -573,7 +512,7 @@ def main():
     parser.add_argument("--selfcheck", action="store_true")
     parser.add_argument("--loop", nargs="?", const=180, type=int, default=None)
     parser.add_argument("--backfill", nargs="?", const=RETENTION_DAYS, type=int, default=None,
-                        metavar="DAYS", help="queue DAYS of history via OD Explorer SQL, then exit")
+                        metavar="DAYS", help="one exhaustive discovery pass DAYS back, then exit")
     args = parser.parse_args()
 
     if args.selfcheck:
@@ -581,7 +520,8 @@ def main():
 
     conn = get_conn()
     if args.backfill is not None:
-        backfill(conn, args.backfill)
+        n = discover(conn, args.backfill)
+        log.info(f"backfill: queued {n}")
         return
     if args.loop is not None:
         while True:
