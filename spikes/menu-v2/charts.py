@@ -94,6 +94,26 @@ def sparkline_png(leads: list[int]) -> bytes:
     return buf.getvalue()
 
 
+def thumb_spark_png(leads: list[int]) -> bytes:
+    """Small 2:1 diverging lead chart for Section thumbnail accessories."""
+    mins = list(range(len(leads)))
+    fig, ax = plt.subplots(figsize=(2.2, 1.1), dpi=144)
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    ax.axis("off")
+    ax.axhline(0, color=MUTED, linewidth=1)
+    ax.fill_between(mins, leads, 0, where=[v >= 0 for v in leads],
+                    color=RADIANT, alpha=0.75, interpolate=True)
+    ax.fill_between(mins, leads, 0, where=[v <= 0 for v in leads],
+                    color=DIRE, alpha=0.75, interpolate=True)
+    ax.margins(x=0, y=0.08)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.02,
+                facecolor=SURFACE, edgecolor="none")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 if __name__ == "__main__":
     # ponytail: self-check — a throw-shaped curve must render both poles
     demo = [0, 600, 1500, 2800, 4200, 6100, 8000, 9500, 8100, 6000,

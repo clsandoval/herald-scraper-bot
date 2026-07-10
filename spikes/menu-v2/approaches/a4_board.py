@@ -96,13 +96,23 @@ def _nav(page="1/4"):
     ]}
 
 
-def _board(header, rows_text, ms, sort="curated", filt=None, page="1/4"):
+def _graph_row(m, files):
+    """Section: kills + length text, mini networth graph as thumbnail accessory."""
+    fname = f"t{m['id']}.png"
+    files.append((fname, charts.thumb_spark_png(m["leads"])))
+    win = "🟢" if m["radiant_win"] else "🔴"
+    return {"type": 9, "components": [
+        {"type": 10, "content": f"{badge(m)} {win} **{m['kills']}** kills · `{render.dur(m['duration'])}`"},
+    ], "accessory": {"type": 11, "media": {"url": f"attachment://{fname}"}}}
+
+
+def _board(header, ms, files, sort="curated", filt=None, page="1/6", n=7):
     return [{"type": 17, "accent_color": GOLD, "components": [
         {"type": 10, "content": header},
         {"type": 14, "divider": True, "spacing": 1},
-        {"type": 10, "content": rows_text},
+        *[_graph_row(m, files) for m in ms[:n]],
         {"type": 14, "divider": True, "spacing": 1},
-        _sort_select(sort), _filter_select(filt), _group_select(), _open_select(ms),
+        _sort_select(sort), _filter_select(filt), _group_select(), _open_select(ms, n),
         _nav(page),
     ]}]
 
@@ -135,17 +145,15 @@ def badge(m):
 
 # ---------- states ----------
 
-def browse_default(ms):
-    top = sorted(ms, key=lambda m: -spice(m))[:10]
-    rows = "\n".join(f"{badge(m)} {render.match_line(m)}" for m in top)
-    return _board("## 🎛️ MATCH BOARD\n-# 38 matches · Jul 9", rows, top)
+def browse_default(ms, files):
+    top = sorted(ms, key=lambda m: -spice(m))
+    return _board("## 🎛️ MATCH BOARD\n-# 38 matches · Jul 9", top, files)
 
 
-def browse_filtered(ms):
+def browse_filtered(ms, files):
     feed = [m for m in ms if m["feeder"]["d"] >= 15]
-    rows = "\n".join(f"{badge(m)} {render.match_line(m, star=m['feeder'])}" for m in feed[:8])
-    return _board(f"## 🎛️ MATCH BOARD\n-# {len(feed)} matches · filters: 15+ death feeder",
-                  rows, feed, filt="15+ death feeder", page="1/1")
+    return _board(f"## 🎛️ MATCH BOARD\n-# {len(feed)} matches · filters: a player died 15+ times",
+                  feed, files, filt="a player died 15+ times", page="1/1", n=6)
 
 
 def grouped_hero(ms):
@@ -239,9 +247,12 @@ def build():
     f1, f1f = focus(ms[0])
     f2, f2f = full_graph(comeback)
     f3, f3f = focus(pa, dice=True)
+    hub_files, filt_files = [], []
+    hub = browse_default(ms, hub_files)
+    filt = browse_filtered(ms, filt_files)
     return [
-        {"components": [_state("hub — first thing everyone sees"), *browse_default(ms)], "files": []},
-        {"components": [_state("filtered: 15+ death feeder"), *browse_filtered(ms)], "files": []},
+        {"components": [_state("hub — first thing everyone sees"), *hub], "files": hub_files},
+        {"components": [_state("filtered: 15+ death feeder"), *filt], "files": filt_files},
         {"components": [_state("grouped by hero"), *grouped_hero(ms)], "files": []},
         {"components": [_state("grouped by length"), *grouped_length(ms)], "files": []},
         {"components": [_state("match opened"), *f1], "files": f1f},
