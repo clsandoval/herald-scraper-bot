@@ -70,7 +70,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Menu-first pivot: SPEC-MATCH-BOARD.md written from validated spike (2026-07-10) — fold into ROADMAP when re-planning Phase 2+ (menu board replaces/precedes the visible AI query layer)
 
 ### Blockers/Concerns
 
