@@ -33,6 +33,14 @@ RAPIER_ID = 133
 # NONE = played through; DISCONNECTED = brief dc but returned (game still valid).
 # Anything else (ABANDONED, AFK, NEVER_CONNECTED*, DISCONNECTED_TOO_LONG) = abandon.
 LEAVER_OK = {None, "NONE", "DISCONNECTED"}
+# 30-60 min = the ordinary-game band, not review material. Keep the short
+# stomps (<30) and the marathon disasters (>60).
+DUR_SKIP_LO = int(os.environ.get("DUR_SKIP_LO", "1800"))
+DUR_SKIP_HI = int(os.environ.get("DUR_SKIP_HI", "3600"))
+
+
+def dur_boring(seconds):
+    return DUR_SKIP_LO <= seconds <= DUR_SKIP_HI
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
 # ponytail: Explorer shows ~32k Herald matches/day but Stratz free tier enriches
@@ -279,6 +287,8 @@ def discover(conn):
             for m in novel:
                 seen_new.add(m["match_id"])
                 rt = m.get("avg_rank_tier")
+                if dur_boring(m.get("duration") or 0):
+                    continue
                 if rt is not None and 10 <= rt <= 15:
                     conn.execute(
                         "INSERT OR IGNORE INTO pending("
@@ -343,6 +353,7 @@ def backfill(conn, days):
                 client,
                 "SELECT match_id, start_time, avg_rank_tier FROM public_matches "
                 f"WHERE avg_rank_tier BETWEEN 10 AND 15 {frontier}"
+                f"AND (duration < {DUR_SKIP_LO} OR duration > {DUR_SKIP_HI}) "
                 "ORDER BY match_id DESC LIMIT 1000",
             )
             if rows is None:
@@ -416,7 +427,7 @@ def enrich(conn):
     enriched = 0
     failed = 0
     dropped = 0
-    abandons = 0
+    cut = 0
     budget = stratz_budget_left(conn)
     if budget <= 0:
         log.info("enrich: stratz daily budget spent, skipping until tomorrow UTC")
@@ -434,9 +445,11 @@ def enrich(conn):
                 log.warning("enrich: stratz capped/unreachable — ending cycle, no attempts burned")
                 break
             ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-            if ready and has_abandon(m):
+            # abandons + mid-length games are both cut here; discovery already
+            # skips boring durations, this catches rows queued before the filter
+            if ready and (has_abandon(m) or dur_boring(m["durationSeconds"])):
                 conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
-                abandons += 1
+                cut += 1
             elif ready:
                 upsert_match(conn, m, art)
                 conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
@@ -456,7 +469,7 @@ def enrich(conn):
                 failed += 1
             conn.commit()
             time.sleep(0.6)  # under Stratz 150/min
-    return enriched, failed, dropped, abandons
+    return enriched, failed, dropped, cut
 
 
 # --- PRUNE ---
@@ -479,12 +492,12 @@ def prune(conn):
 
 def cycle(conn):
     n_disc = discover(conn)
-    n_enr, n_fail, n_drop, n_aband = enrich(conn)
+    n_enr, n_fail, n_drop, n_cut = enrich(conn)
     n_prune = prune(conn)
     mtot = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
     ptot = conn.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
     log.info(
-        f"cycle: discovered {n_disc}, enriched {n_enr}, abandons {n_aband}, "
+        f"cycle: discovered {n_disc}, enriched {n_enr}, cut {n_cut} (abandon/boring-dur), "
         f"not-ready {n_fail}, dropped {n_drop}, pruned {n_prune} | matches={mtot} pending={ptot}"
     )
 
