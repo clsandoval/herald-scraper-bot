@@ -155,7 +155,7 @@ class Board(discord.ui.LayoutView):
         self.st = st
         self.files = []
         build = {"list": self._list, "group": self._group, "focus": self._focus,
-                 "graph": self._graph, "adv": self._adv_results}[st["mode"]]
+                 "adv": self._adv_results}[st["mode"]]
         build()
 
     # ---- interactions plumbing ----
@@ -313,22 +313,20 @@ class Board(discord.ui.LayoutView):
     # ---- focus / graph ----
     def _focus(self):
         m = next(x for x in MS if x["id"] == self.st["match"])
-        self.files = [(f"s{m['id']}.png", charts.sparkline_png(m["leads"]))]
+        self.files = [(f"g{m['id']}.png", charts.networth_lead_png(
+            m["leads"], f"Match {m['id']} — Net Worth Lead"))]
         r = sorted([p for p in m["players"] if p["is_radiant"]], key=lambda p: -p["networth"])
         d = sorted([p for p in m["players"] if not p["is_radiant"]], key=lambda p: -p["networth"])
         win = "🟢 Radiant win" if m["radiant_win"] else "🔴 Dire win"
         c = discord.ui.Container(accent_colour=discord.Colour(GREEN if m["radiant_win"] else RED))
         c.add_item(discord.ui.TextDisplay(
             f"## Match {m['id']} · {win} · `{render.dur(m['duration'])}` · 🟢 {m['kills_r']} — {m['kills_d']} 🔴"))
-        g = discord.ui.MediaGallery()
-        g.add_item(media=f"attachment://s{m['id']}.png")
-        c.add_item(g)
         c.add_item(discord.ui.TextDisplay("**Radiant**\n" + "\n".join(render.player_line(p) for p in r)))
         c.add_item(discord.ui.Separator())
         c.add_item(discord.ui.TextDisplay("**Dire**\n" + "\n".join(render.player_line(p) for p in d)))
-
-        async def graph(itx):
-            await self._update(itx, mode="graph")
+        g = discord.ui.MediaGallery()
+        g.add_item(media=f"attachment://g{m['id']}.png")
+        c.add_item(g)
 
         async def back(itx):
             await self._update(itx, mode="list", match=None)
@@ -337,31 +335,10 @@ class Board(discord.ui.LayoutView):
             await self._update(itx, match=random.choice(MS)["id"])
 
         c.add_item(discord.ui.ActionRow(
-            _btn("mb_g", "📈 Graph", graph, style=discord.ButtonStyle.primary),
             _btn("mb_b", "◀ Board", back),
             _btn("mb_d2", "🎲", dice),
             _btn(None, "OpenDota", None, url=f"https://www.opendota.com/matches/{m['id']}"),
         ))
-        self.add_item(c)
-
-    def _graph(self):
-        m = next(x for x in MS if x["id"] == self.st["match"])
-        self.files = [(f"g{m['id']}.png", charts.networth_lead_png(
-            m["leads"], f"Match {m['id']} — Net Worth Lead"))]
-        c = discord.ui.Container(accent_colour=discord.Colour(GREEN if m["radiant_win"] else RED))
-        c.add_item(discord.ui.TextDisplay(f"## Match {m['id']} · net worth"))
-        g = discord.ui.MediaGallery()
-        g.add_item(media=f"attachment://g{m['id']}.png")
-        c.add_item(g)
-
-        async def back(itx):
-            await self._update(itx, mode="focus")
-
-        async def board(itx):
-            await self._update(itx, mode="list", match=None)
-
-        c.add_item(discord.ui.ActionRow(
-            _btn("mb_sc", "◀ Scoreboard", back), _btn("mb_bd", "🎛️ Board", board)))
         self.add_item(c)
 
     # ---- advanced results ----
