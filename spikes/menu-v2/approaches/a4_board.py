@@ -100,9 +100,10 @@ def _graph_row(m, files):
     """Section: kills + length text, mini networth graph as thumbnail accessory."""
     fname = f"t{m['id']}.png"
     files.append((fname, charts.thumb_spark_png(m["leads"])))
-    win = "🟢" if m["radiant_win"] else "🔴"
+    r = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if p["is_radiant"])
+    d = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if not p["is_radiant"])
     return {"type": 9, "components": [
-        {"type": 10, "content": f"{badge(m)} {win} **{m['kills']}** kills · `{render.dur(m['duration'])}`"},
+        {"type": 10, "content": f"**{m['kills']}** kills · `{render.dur(m['duration'])}`\n{r} ⚔ {d}"},
     ], "accessory": {"type": 11, "media": {"url": f"attachment://{fname}"}}}
 
 
