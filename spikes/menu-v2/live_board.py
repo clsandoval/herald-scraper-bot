@@ -76,6 +76,14 @@ _conn.execute("""
     FROM matches""")
 _conn.execute("CREATE INDEX temp.idx_flips ON flips(match_id)")
 
+# closeness = mean |networth lead| across the whole game (low = wire-to-wire nailbiter)
+_conn.execute("""
+    CREATE TEMP TABLE tight AS
+    SELECT matches.match_id, (SELECT avg(abs(value))
+           FROM json_each(matches.raw, '$.radiantNetworthLeads')) n
+    FROM matches""")
+_conn.execute("CREATE INDEX temp.idx_tight ON tight(match_id)")
+
 # rapier counts from final inventories (item 133); consumed/lost rapiers don't show
 _conn.execute("""
     CREATE TEMP TABLE rapiers AS
@@ -83,33 +91,42 @@ _conn.execute("""
     WHERE j.value = 133 GROUP BY p.match_id""")
 _conn.execute("CREATE INDEX temp.idx_rapiers ON rapiers(match_id)")
 
-# watchability = z(kpm) + 0.7*z(lead flips), stats frozen at startup.
-# heroDamage isn't enriched yet — add to the formula after the re-enrich sweep.
+# watchability = z(kpm) + 0.85*z(hero dmg/min) + 0.7*z(lead flips), stats frozen
+# at startup. z(kpm) capped at +2 so freak 15-min bloodbaths can't drown the rest.
 import math  # noqa: E402
-_ST = q("SELECT avg(kpm), avg(kpm*kpm), (SELECT avg(n) FROM flips), (SELECT avg(n*n) FROM flips) FROM matches")[0]
+_HDPM = "coalesce(hero_damage, 0) * 60.0 / duration_s"
+_ST = q(f"SELECT avg(kpm), avg(kpm*kpm), (SELECT avg(n) FROM flips), (SELECT avg(n*n) FROM flips),"
+        f" avg({_HDPM}), avg(({_HDPM}) * ({_HDPM})),"
+        f" avg(duration_s), avg(duration_s * 1.0 * duration_s) FROM matches")[0]
 _KPM_A, _KPM_S = _ST[0], math.sqrt(_ST[1] - _ST[0] ** 2)
 _FL_A, _FL_S = _ST[2], math.sqrt(_ST[3] - _ST[2] ** 2)
-# z(kpm) capped at +2 so freak 15-min bloodbaths can't drown out the flip term
+_HD_A, _HD_S = _ST[4], math.sqrt(max(_ST[5] - _ST[4] ** 2, 1e-9))
+_DU_A, _DU_S = _ST[6], math.sqrt(max(_ST[7] - _ST[6] ** 2, 1e-9))
+# + duration term: the short-game band is where the degenerate stomps live
 _SPICE = (f"(min((kpm - {_KPM_A:.3f}) / {_KPM_S:.3f}, 2.0)"
-          f" + 0.7 * ((SELECT n FROM flips f WHERE f.match_id = matches.match_id) - {_FL_A:.3f}) / {_FL_S:.3f})")
+          f" + 0.85 * (({_HDPM}) - {_HD_A:.1f}) / {_HD_S:.1f}"
+          f" + 0.7 * ((SELECT n FROM flips f WHERE f.match_id = matches.match_id) - {_FL_A:.3f}) / {_FL_S:.3f}"
+          f" + 0.5 * (duration_s - {_DU_A:.1f}) / {_DU_S:.1f})")
 
 # direction-neutral metrics; the ⬆/⬇ nav button supplies ASC/DESC
 SORTS = {  # key -> (label, ORDER BY expr)
-    "spice": ("Watchability (kills/min + lead flips)", _SPICE),
+    "spice": ("Watchability (kills + hero damage + flips)", _SPICE),
+    "hd": ("Combined hero damage", "coalesce(hero_damage, 0)"),
     "kills": ("Total kills", "kills"),
     "kpm": ("Kills per minute", "kpm"),
     "dur": ("Match time", "duration_s"),
-    "close": ("Peak gold lead", "max(max_lead, -min_lead)"),
-    "stomp": ("Final gold gap", "abs(final_lead)"),
-    "gpm": ("Highest single-player GPM", "max_gpm"),
+    "tight": ("Average gold gap all game",
+              "(SELECT n FROM tight t WHERE t.match_id = matches.match_id)"),
     "flips": ("Times the networth lead flipped",
               "(SELECT n FROM flips f WHERE f.match_id = matches.match_id)"),
     "rapiers": ("Divine Rapiers held at game end",
                 "coalesce((SELECT n FROM rapiers r WHERE r.match_id = matches.match_id), 0)"),
     "rank": ("Average rank", "avg_rank_tier"),
+    "weird": ("Build weirdness", "coalesce(weirdness, 0)"),
 }
 # picking a new primary sort resets direction to its natural default
-PREF_DIR = {"rank": "ASC"}  # lowest-rank games are the draw
+PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
+            "tight": "ASC"}  # smallest average gap = the nailbiters
 
 # ponytail: "uncommon" = the 10 least-picked heroes, frozen at startup (~15% of matches)
 _RARE_IDS = ",".join(str(r[0]) for r in q(
@@ -121,9 +138,11 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
              f" AND p.hero_id IN ({_RARE_IDS}))"),
     "lowrank": ("Average rank below Herald 3", "matches.avg_rank_tier < 13"),
     "highrank": ("Average rank Herald 3 or above", "matches.avg_rank_tier >= 13"),
+    "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
+    "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
 }
 # threshold families: picking two of a kind just ANDs to the stricter one
-for _t in (60, 70, 80):
+for _t in (70, 80):
     FILTERS[f"war{_t}"] = (f"Longer than {_t} min", f"matches.duration_s >= {_t * 60}")
 FILTERS["speed20"] = ("Shorter than 20 min", "matches.duration_s < 1200")
 

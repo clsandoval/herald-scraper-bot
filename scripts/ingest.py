@@ -14,10 +14,12 @@ import time, which would break --selfcheck (must run with no env vars set).
 import argparse
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
 import time
+from collections import Counter
 
 import httpx
 
@@ -66,6 +68,8 @@ STRATZ_FIELDS = """
       experiencePerMinute numLastHits numDenies lane role position
       heroDamage towerDamage heroHealing level partyId intentionalFeeding
       dotaPlusHeroXp
+      dotaPlus { level }
+      abilities { abilityId time level isTalent }
       steamAccount { seasonRank smurfFlag dotaAccountLevel }
       item0Id item1Id item2Id item3Id item4Id item5Id
       backpack0Id backpack1Id backpack2Id neutral0Id
@@ -90,7 +94,8 @@ def init_db(conn):
           max_lead INTEGER, min_lead INTEGER, final_lead INTEGER, comeback_gold INTEGER,
           throw_gold INTEGER, feeder_deaths INTEGER, top_kills INTEGER, max_gpm INTEGER,
           winner_towers_lost INTEGER, has_rapier INTEGER, raw TEXT, enriched_at INTEGER,
-          lead_flips INTEGER, hero_damage INTEGER)
+          lead_flips INTEGER, hero_damage INTEGER, has_smurf INTEGER, has_feeder INTEGER,
+          max_party INTEGER, max_apm INTEGER, max_dplus INTEGER, weirdness REAL)
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_matches_start ON matches(start_time)")
@@ -106,6 +111,9 @@ def init_db(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_players_hero ON match_players(hero_id)")
     # migrate pre-existing DBs (ALTER is a no-op error when the column exists)
     for table, col in [("matches", "lead_flips INTEGER"), ("matches", "hero_damage INTEGER"),
+                       ("matches", "has_smurf INTEGER"), ("matches", "has_feeder INTEGER"),
+                       ("matches", "max_party INTEGER"), ("matches", "max_apm INTEGER"),
+                       ("matches", "max_dplus INTEGER"), ("matches", "weirdness REAL"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -201,6 +209,21 @@ def derived_cols(raw):
     leads = v["leads"]
     lead_flips = sum(1 for a, b in zip(leads, leads[1:]) if (a > 0) != (b > 0))
     hero_damage = sum(p.get("heroDamage") or 0 for p in raw["players"])
+    rp = raw["players"]
+    has_smurf = 1 if any((p.get("steamAccount") or {}).get("smurfFlag") or 0 for p in rp) else 0
+    has_feeder = 1 if any(p.get("intentionalFeeding") for p in rp) else 0
+    parties = {}
+    for p in rp:
+        if p.get("partyId") is not None:
+            parties[p["partyId"]] = parties.get(p["partyId"], 0) + 1
+    max_party = max(parties.values(), default=1)
+
+    def _apm(p):
+        a = (p.get("stats") or {}).get("actionsPerMinute") or []
+        return sum(a) / len(a) if a else 0
+
+    max_apm = int(max((_apm(p) for p in rp), default=0))
+    max_dplus = max(((p.get("dotaPlus") or {}).get("level") or 0 for p in rp), default=0)
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
@@ -208,6 +231,8 @@ def derived_cols(raw):
         "feeder_deaths": feeder_deaths, "top_kills": top_kills, "max_gpm": max_gpm,
         "winner_towers_lost": winner_towers_lost, "has_rapier": has_rapier,
         "lead_flips": lead_flips, "hero_damage": hero_damage,
+        "has_smurf": has_smurf, "has_feeder": has_feeder, "max_party": max_party,
+        "max_apm": max_apm, "max_dplus": max_dplus,
     }
 
 
@@ -222,8 +247,9 @@ def upsert_match(conn, raw, avg_rank_tier):
           match_id, start_time, duration_s, radiant_win, game_mode, rank, bracket,
           avg_rank_tier, kills_r, kills_d, kills, kpm, max_lead, min_lead, final_lead,
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
-          winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage,
+          has_smurf, has_feeder, max_party, max_apm, max_dplus
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -233,6 +259,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             c["final_lead"], c["comeback_gold"], c["throw_gold"], c["feeder_deaths"],
             c["top_kills"], c["max_gpm"], c["winner_towers_lost"], c["has_rapier"],
             json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
+            c["has_smurf"], c["has_feeder"], c["max_party"], c["max_apm"], c["max_dplus"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
@@ -466,6 +493,72 @@ def prune(conn):
     return len(old)
 
 
+# --- BUILD WEIRDNESS (corpus-relative, no network) ---
+# Wrongness, not rarity: PMI of item-given-hero vs item-overall, so a globally
+# common item on the wrong hero (Armlet Lina) scores, a new rare item doesn't.
+# Per match = the weirdest player's top-3 distinct-item-family sum.
+
+def score_weirdness(conn):
+    items_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "spikes", "menu-v2", "assets", "items.json")
+    items = json.load(open(items_path))
+    fam = {v["id"]: (v.get("dname") or str(v["id"])) for v in items.values()
+           if (v.get("cost") or 0) >= 2000}
+    hcount, htot, gcount = Counter(), Counter(), Counter()
+    gtot = 0
+    per_match = []
+    for mid, raw in conn.execute("SELECT match_id, raw FROM matches").fetchall():
+        pls = []
+        for p in json.loads(raw)["players"]:
+            buys = [(b["time"], b["itemId"]) for b in (p.get("stats") or {}).get("itemPurchases") or []
+                    if b["itemId"] in fam and b["time"] > 0]
+            for _t, i in buys:
+                hcount[(p["heroId"], i)] += 1
+                htot[p["heroId"]] += 1
+                gcount[i] += 1
+                gtot += 1
+            pls.append((p["heroId"], buys))
+        per_match.append((mid, pls))
+    if not gtot:
+        return 0
+    V = len(fam)
+
+    def pmi(h, i):
+        ph = (hcount[(h, i)] - 1 + 0.5) / (htot[h] + 0.5 * V)  # own purchase excluded
+        return -math.log(max(ph / (gcount[i] / gtot), 1e-9))
+
+    for mid, pls in per_match:
+        w = 0.0
+        for h, buys in pls:
+            best = {}
+            for _t, i in buys:
+                s = pmi(h, i)
+                if s > best.get(fam[i], 0):
+                    best[fam[i]] = s
+            w = max(w, sum(sorted(best.values(), reverse=True)[:3]))
+        conn.execute("UPDATE matches SET weirdness=? WHERE match_id=?", (round(w, 2), mid))
+    conn.commit()
+    return len(per_match)
+
+
+# --- RECOMPUTE (derived columns from stored raw, no network) ---
+
+def recompute(conn):
+    n = 0
+    for mid, raw in conn.execute("SELECT match_id, raw FROM matches").fetchall():
+        c = derived_cols(json.loads(raw))
+        conn.execute(
+            "UPDATE matches SET " + ", ".join(f"{k}=?" for k in c) + " WHERE match_id=?",
+            list(c.values()) + [mid],
+        )
+        n += 1
+        if n % 5000 == 0:
+            conn.commit()
+            log.info(f"recompute: {n}")
+    conn.commit()
+    return n
+
+
 # --- CYCLE ---
 
 def cycle(conn):
@@ -546,22 +639,38 @@ def main():
     parser.add_argument("--loop", nargs="?", const=180, type=int, default=None)
     parser.add_argument("--backfill", nargs="?", const=RETENTION_DAYS, type=int, default=None,
                         metavar="DAYS", help="one exhaustive discovery pass DAYS back, then exit")
+    parser.add_argument("--recompute", action="store_true",
+                        help="recompute derived columns from stored raw JSON, then exit")
+    parser.add_argument("--weirdness", action="store_true",
+                        help="rescore build weirdness for all matches, then exit")
     args = parser.parse_args()
 
     if args.selfcheck:
         sys.exit(selfcheck())
 
     conn = get_conn()
+    if args.recompute:
+        log.info(f"recompute: {recompute(conn)} matches updated")
+        return
+    if args.weirdness:
+        log.info(f"weirdness: {score_weirdness(conn)} matches scored")
+        return
     if args.backfill is not None:
         n = discover(conn, args.backfill)
         log.info(f"backfill: queued {n}")
         return
     if args.loop is not None:
+        n = 0
         while True:
             try:
                 cycle(conn)
+                # ponytail: full corpus rescore every ~50 cycles (~daily at 30min
+                # loops); new matches sort as weirdness 0 until then
+                if n % 50 == 0:
+                    log.info(f"weirdness: {score_weirdness(conn)} matches scored")
             except Exception as e:
                 log.error(f"cycle failed: {e}")
+            n += 1
             time.sleep(args.loop)
     else:
         cycle(conn)  # one-shot then exit
