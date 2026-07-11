@@ -382,6 +382,9 @@ class Board(discord.ui.LayoutView):
         for s in (sel_sort, sel_filt, sel_open):
             c.add_item(discord.ui.ActionRow(s))
         c.add_item(self._nav_row(pages))
+        if not self.st.get("private"):
+            c.add_item(discord.ui.TextDisplay(
+                "-# 💡 Type `/heralds` anywhere to open your own private board only you can see."))
         self.add_item(c)
 
     # ---- focus / graph ----
@@ -510,6 +513,7 @@ tree = discord.app_commands.CommandTree(client)
 @tree.command(name="heralds", description="Open a private Herald match board only you can see")
 async def board_cmd(itx: discord.Interaction):
     st = default_state()
+    st["private"] = True  # ephemeral board — suppress the public "type /heralds" hint
     v = Board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
     await itx.response.send_message(view=v, files=files, ephemeral=True)
