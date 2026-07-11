@@ -142,6 +142,13 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
     "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
     "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
 }
+# off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
+_W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
+          " LIMIT 1 OFFSET (SELECT count(*) * 95 / 100 FROM matches WHERE weirdness IS NOT NULL)")
+        or [[None]])[0][0]
+if _W95:
+    FILTERS["weirdf"] = ("Off-meta build in game", f"matches.weirdness >= {_W95:.2f}")
+
 # threshold families: picking two of a kind just ANDs to the stricter one
 for _t in (70, 80):
     FILTERS[f"war{_t}"] = (f"Longer than {_t} min", f"matches.duration_s >= {_t * 60}")
@@ -375,6 +382,17 @@ class Board(discord.ui.LayoutView):
         c.add_item(discord.ui.TextDisplay("**Radiant**\n" + "\n".join(render.player_line(p) for p in r)))
         c.add_item(discord.ui.Separator())
         c.add_item(discord.ui.TextDisplay("**Dire**\n" + "\n".join(render.player_line(p) for p in d)))
+        # off-meta build receipts — why this match scores weird (purchases, not final items)
+        row = q("SELECT weirdness, weird_notes FROM matches WHERE match_id=?", (m["id"],))
+        if row and (row[0][0] or 0) >= 6 and row[0][1]:
+            lines = []
+            for note in json.loads(row[0][1]):
+                if note["score"] < 6:
+                    continue
+                buys = ", ".join(f"{f} @{t}m" for f, t, _s in note["items"])
+                lines.append(f"{render.hero_emoji(note['hero_id']) or render.hero_name(note['hero_id'])} {buys}")
+            if lines:
+                c.add_item(discord.ui.TextDisplay("🌀 **Off-meta builds**\n" + "\n".join(lines)))
         g = discord.ui.MediaGallery()
         g.add_item(media=f"attachment://g{m['id']}.png")
         c.add_item(g)

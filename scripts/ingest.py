@@ -114,6 +114,7 @@ def init_db(conn):
                        ("matches", "has_smurf INTEGER"), ("matches", "has_feeder INTEGER"),
                        ("matches", "max_party INTEGER"), ("matches", "max_apm INTEGER"),
                        ("matches", "max_dplus INTEGER"), ("matches", "weirdness REAL"),
+                       ("matches", "weird_notes TEXT"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -525,19 +526,30 @@ def score_weirdness(conn):
 
     n = 0
     updates = []
+    NOTE_BAR = 8.0  # extra players only get receipts when independently this weird
     for mid, raw in conn.execute("SELECT match_id, raw FROM matches"):
-        w = 0.0
+        scored = []  # (score, hero_id, [(fam, minute, pmi)...])
         for p in json.loads(raw)["players"]:
-            best = {}
+            best = {}  # family -> (pmi, minute)
             for b in (p.get("stats") or {}).get("itemPurchases") or []:
                 if b["itemId"] in fam and b["time"] > 0:
                     s = pmi(p["heroId"], b["itemId"])
-                    if s > best.get(fam[b["itemId"]], 0):
-                        best[fam[b["itemId"]]] = s
-            w = max(w, sum(sorted(best.values(), reverse=True)[:3]))
-        updates.append((round(w, 2), mid))
+                    f = fam[b["itemId"]]
+                    if s > best.get(f, (0, 0))[0]:
+                        best[f] = (s, b["time"] // 60)
+            top = sorted(((v[0], v[1], f) for f, v in best.items()), reverse=True)[:3]
+            scored.append((sum(t[0] for t in top), p["heroId"],
+                           [[f, t, round(s, 1)] for s, t, f in top]))
+        scored.sort(reverse=True)
+        # accumulate every player over the bar (two trolls beat one); below the
+        # bar the weirdest player alone carries the score
+        over = [s for s, _h, _t in scored if s >= NOTE_BAR]
+        w = sum(over) if over else (scored[0][0] if scored else 0.0)
+        notes = [{"hero_id": h, "score": round(s, 1), "items": tp}
+                 for k, (s, h, tp) in enumerate(scored) if k == 0 or s >= NOTE_BAR][:3]
+        updates.append((round(w, 2), json.dumps(notes), mid))
         n += 1
-    conn.executemany("UPDATE matches SET weirdness=? WHERE match_id=?", updates)
+    conn.executemany("UPDATE matches SET weirdness=?, weird_notes=? WHERE match_id=?", updates)
     conn.commit()
     return n
 
