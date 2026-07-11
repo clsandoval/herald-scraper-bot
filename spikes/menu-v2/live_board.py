@@ -15,6 +15,7 @@ import logging
 import pathlib
 import sqlite3
 import sys
+import time
 
 import discord
 
@@ -40,9 +41,29 @@ DB_PATH = os.environ.get("HERALD_DB", str(REPO / "herald.db"))
 _conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False)
 _conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers at boot — wait, don't die
 
+# ponytail: _conn above is read-only (mode=ro) and can't write telemetry; a
+# separate write conn is needed. discord.py runs callbacks on one loop thread
+# so a single shared write conn is fine.
+_wconn = sqlite3.connect(DB_PATH, check_same_thread=False)
+_wconn.execute("PRAGMA journal_mode=WAL")
+_wconn.execute("PRAGMA busy_timeout=30000")  # shared with ingest loop — wait, don't die
+_wconn.execute("CREATE TABLE IF NOT EXISTS usage"
+               " (ts INTEGER, user_id INTEGER, user_name TEXT, action TEXT)")
+_wconn.commit()
+
 
 def q(sql, params=()):
     return _conn.execute(sql, params).fetchall()
+
+
+def log_usage(user, action):
+    """Record one usage row (ts, user id/name, action string); never raises."""
+    try:
+        _wconn.execute("INSERT INTO usage(ts, user_id, user_name, action) VALUES (?,?,?,?)",
+                       (int(time.time()), user.id, user.display_name, action))
+        _wconn.commit()
+    except Exception as e:
+        log.warning(f"usage log failed: {e}")
 
 
 def hydrate(ids):
@@ -272,6 +293,7 @@ class Board(discord.ui.LayoutView):
         files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
         await itx.response.edit_message(view=nv, attachments=files)
         log.info(f"{itx.user} -> {changes}")
+        log_usage(itx.user, ",".join(changes) or "noop")
 
     # ---- list mode ----
     def _controls(self, page_ms):
@@ -360,6 +382,9 @@ class Board(discord.ui.LayoutView):
         for s in (sel_sort, sel_filt, sel_open):
             c.add_item(discord.ui.ActionRow(s))
         c.add_item(self._nav_row(pages))
+        if not self.st.get("private"):
+            c.add_item(discord.ui.TextDisplay(
+                "-# 💡 Type `/heralds` anywhere to open your own private board only you can see."))
         self.add_item(c)
 
     # ---- focus / graph ----
@@ -476,6 +501,7 @@ class AdvModal(discord.ui.Modal, title="Advanced search"):
         # defer + message.edit path breaks on ephemerals
         await itx.response.edit_message(view=nv, attachments=files)
         log.info(f"{itx.user} advanced: {adv}")
+        log_usage(itx.user, "advanced")
 
 
 # ---------------- bot ----------------
@@ -487,12 +513,14 @@ tree = discord.app_commands.CommandTree(client)
 @tree.command(name="heralds", description="Open a private Herald match board only you can see")
 async def board_cmd(itx: discord.Interaction):
     st = default_state()
+    st["private"] = True  # ephemeral board — suppress the public "type /heralds" hint
     v = Board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
     await itx.response.send_message(view=v, files=files, ephemeral=True)
     msg = await itx.original_response()
     STATE[msg.id] = st
     log.info(f"{itx.user} opened a private board")
+    log_usage(itx.user, "slash:/heralds")
 
 
 @client.event
