@@ -504,21 +504,17 @@ def score_weirdness(conn):
     items = json.load(open(items_path))
     fam = {v["id"]: (v.get("dname") or str(v["id"])) for v in items.values()
            if (v.get("cost") or 0) >= 2000}
+    # two streaming passes over raw — never hold the corpus in memory (1GB VM)
     hcount, htot, gcount = Counter(), Counter(), Counter()
     gtot = 0
-    per_match = []
-    for mid, raw in conn.execute("SELECT match_id, raw FROM matches").fetchall():
-        pls = []
+    for (raw,) in conn.execute("SELECT raw FROM matches"):
         for p in json.loads(raw)["players"]:
-            buys = [(b["time"], b["itemId"]) for b in (p.get("stats") or {}).get("itemPurchases") or []
-                    if b["itemId"] in fam and b["time"] > 0]
-            for _t, i in buys:
-                hcount[(p["heroId"], i)] += 1
-                htot[p["heroId"]] += 1
-                gcount[i] += 1
-                gtot += 1
-            pls.append((p["heroId"], buys))
-        per_match.append((mid, pls))
+            for b in (p.get("stats") or {}).get("itemPurchases") or []:
+                if b["itemId"] in fam and b["time"] > 0:
+                    hcount[(p["heroId"], b["itemId"])] += 1
+                    htot[p["heroId"]] += 1
+                    gcount[b["itemId"]] += 1
+                    gtot += 1
     if not gtot:
         return 0
     V = len(fam)
@@ -527,18 +523,23 @@ def score_weirdness(conn):
         ph = (hcount[(h, i)] - 1 + 0.5) / (htot[h] + 0.5 * V)  # own purchase excluded
         return -math.log(max(ph / (gcount[i] / gtot), 1e-9))
 
-    for mid, pls in per_match:
+    n = 0
+    updates = []
+    for mid, raw in conn.execute("SELECT match_id, raw FROM matches"):
         w = 0.0
-        for h, buys in pls:
+        for p in json.loads(raw)["players"]:
             best = {}
-            for _t, i in buys:
-                s = pmi(h, i)
-                if s > best.get(fam[i], 0):
-                    best[fam[i]] = s
+            for b in (p.get("stats") or {}).get("itemPurchases") or []:
+                if b["itemId"] in fam and b["time"] > 0:
+                    s = pmi(p["heroId"], b["itemId"])
+                    if s > best.get(fam[b["itemId"]], 0):
+                        best[fam[b["itemId"]]] = s
             w = max(w, sum(sorted(best.values(), reverse=True)[:3]))
-        conn.execute("UPDATE matches SET weirdness=? WHERE match_id=?", (round(w, 2), mid))
+        updates.append((round(w, 2), mid))
+        n += 1
+    conn.executemany("UPDATE matches SET weirdness=? WHERE match_id=?", updates)
     conn.commit()
-    return len(per_match)
+    return n
 
 
 # --- RECOMPUTE (derived columns from stored raw, no network) ---
@@ -665,8 +666,9 @@ def main():
             try:
                 cycle(conn)
                 # ponytail: full corpus rescore every ~50 cycles (~daily at 30min
-                # loops); new matches sort as weirdness 0 until then
-                if n % 50 == 0:
+                # loops), NOT at boot — boot rescore raced board startup into OOM.
+                # New matches sort as weirdness 0 until the next rescore.
+                if n and n % 50 == 0:
                     log.info(f"weirdness: {score_weirdness(conn)} matches scored")
             except Exception as e:
                 log.error(f"cycle failed: {e}")
