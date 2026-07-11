@@ -1058,5 +1058,289 @@
 "i_great_famango": {
 "name": "i_great_famango",
 "id": "1525035518386241639"
+},
+"h_morphling": {
+"name": "h_morphling",
+"id": "1525367240273428642"
+},
+"h_puck": {
+"name": "h_puck",
+"id": "1525367242848473170"
+},
+"h_rattletrap": {
+"name": "h_rattletrap",
+"id": "1525367245365186620"
+},
+"h_dark_seer": {
+"name": "h_dark_seer",
+"id": "1525367248532013169"
+},
+"h_enchantress": {
+"name": "h_enchantress",
+"id": "1525367254001254450"
+},
+"h_batrider": {
+"name": "h_batrider",
+"id": "1525367256853250200"
+},
+"h_chen": {
+"name": "h_chen",
+"id": "1525367259835404348"
+},
+"h_spectre": {
+"name": "h_spectre",
+"id": "1525367262784262154"
+},
+"h_doom_bringer": {
+"name": "h_doom_bringer",
+"id": "1525367265124552717"
+},
+"h_gyrocopter": {
+"name": "h_gyrocopter",
+"id": "1525367268152967248"
+},
+"h_alchemist": {
+"name": "h_alchemist",
+"id": "1525367270807965809"
+},
+"h_brewmaster": {
+"name": "h_brewmaster",
+"id": "1525367273299378307"
+},
+"h_meepo": {
+"name": "h_meepo",
+"id": "1525367275794731189"
+},
+"h_visage": {
+"name": "h_visage",
+"id": "1525367278420492378"
+},
+"h_medusa": {
+"name": "h_medusa",
+"id": "1525367281130012682"
+},
+"h_shredder": {
+"name": "h_shredder",
+"id": "1525367283588005969"
+},
+"h_phoenix": {
+"name": "h_phoenix",
+"id": "1525367286339211304"
+},
+"h_winter_wyvern": {
+"name": "h_winter_wyvern",
+"id": "1525367288998531122"
+},
+"h_pangolier": {
+"name": "h_pangolier",
+"id": "1525367291787612192"
+},
+"h_marci": {
+"name": "h_marci",
+"id": "1525367294694391881"
+},
+"i_broadsword": {
+"name": "i_broadsword",
+"id": "1525367297592528947"
+},
+"i_chainmail": {
+"name": "i_chainmail",
+"id": "1525367300218294302"
+},
+"i_ring_of_protection": {
+"name": "i_ring_of_protection",
+"id": "1525367305461174452"
+},
+"i_belt_of_strength": {
+"name": "i_belt_of_strength",
+"id": "1525367307986272296"
+},
+"i_robe": {
+"name": "i_robe",
+"id": "1525367310561444022"
+},
+"i_ring_of_regen": {
+"name": "i_ring_of_regen",
+"id": "1525367313014980682"
+},
+"i_sobi_mask": {
+"name": "i_sobi_mask",
+"id": "1525367315666042910"
+},
+"i_gem": {
+"name": "i_gem",
+"id": "1525367318467842198"
+},
+"i_cloak": {
+"name": "i_cloak",
+"id": "1525367321131090041"
+},
+"i_cheese": {
+"name": "i_cheese",
+"id": "1525367323614122135"
+},
+"i_flask": {
+"name": "i_flask",
+"id": "1525367326122311701"
+},
+"i_tpscroll": {
+"name": "i_tpscroll",
+"id": "1525367332086743091"
+},
+"i_relic": {
+"name": "i_relic",
+"id": "1525367334871498863"
+},
+"i_ring_of_health": {
+"name": "i_ring_of_health",
+"id": "1525367337333690370"
+},
+"i_oblivion_staff": {
+"name": "i_oblivion_staff",
+"id": "1525367340445732954"
+},
+"i_mekansm": {
+"name": "i_mekansm",
+"id": "1525367343046463539"
+},
+"i_ring_of_basilius": {
+"name": "i_ring_of_basilius",
+"id": "1525367345369972888"
+},
+"i_headdress": {
+"name": "i_headdress",
+"id": "1525367348687667353"
+},
+"i_dagon": {
+"name": "i_dagon",
+"id": "1525367351049191487"
+},
+"i_helm_of_the_dominator": {
+"name": "i_helm_of_the_dominator",
+"id": "1525367353917968505"
+},
+"i_dagon_2": {
+"name": "i_dagon_2",
+"id": "1525367356640198848"
+},
+"i_shadow_amulet": {
+"name": "i_shadow_amulet",
+"id": "1525367359412371536"
+},
+"i_blight_stone": {
+"name": "i_blight_stone",
+"id": "1525367361555927062"
+},
+"i_tango_single": {
+"name": "i_tango_single",
+"id": "1525367364483551382"
+},
+"i_refresher_shard": {
+"name": "i_refresher_shard",
+"id": "1525367367276953670"
+},
+"i_crown": {
+"name": "i_crown",
+"id": "1525367369545814120"
+},
+"i_ultimate_scepter_2": {
+"name": "i_ultimate_scepter_2",
+"id": "1525367372662313051"
+},
+"i_voodoo_mask": {
+"name": "i_voodoo_mask",
+"id": "1525367375258456158"
+},
+"i_aghanims_shard": {
+"name": "i_aghanims_shard",
+"id": "1525367377846341702"
+},
+"i_helm_of_the_overlord": {
+"name": "i_helm_of_the_overlord",
+"id": "1525367380568576072"
+},
+"i_specialists_array": {
+"name": "i_specialists_array",
+"id": "1525367383122771988"
+},
+"i_pavise": {
+"name": "i_pavise",
+"id": "1525367395810676830"
+},
+"i_royale_with_cheese": {
+"name": "i_royale_with_cheese",
+"id": "1525367398402756749"
+},
+"i_roshans_banner": {
+"name": "i_roshans_banner",
+"id": "1525367405029883984"
+},
+"i_shawl": {
+"name": "i_shawl",
+"id": "1525367412382371870"
+},
+"i_wizard_hat": {
+"name": "i_wizard_hat",
+"id": "1525367414974451753"
+},
+"i_eldwurms_edda": {
+"name": "i_eldwurms_edda",
+"id": "1525367417776377876"
+},
+"i_foragers_health": {
+"name": "i_foragers_health",
+"id": "1525367420389425202"
+},
+"i_foragers_stats": {
+"name": "i_foragers_stats",
+"id": "1525367422889099374"
+},
+"i_foragers_mana": {
+"name": "i_foragers_mana",
+"id": "1525367425506480128"
+},
+"i_chasm_stone": {
+"name": "i_chasm_stone",
+"id": "1525367428257681530"
+},
+"i_greater_famango": {
+"name": "i_greater_famango",
+"id": "1525367431009402902"
+},
+"rank_11": {
+"name": "rank_11",
+"id": "1525432049324789882"
+},
+"rank_12": {
+"name": "rank_12",
+"id": "1525432052646940692"
+},
+"rank_13": {
+"name": "rank_13",
+"id": "1525432055842996424"
+},
+"rank_14": {
+"name": "rank_14",
+"id": "1525432058942591057"
+},
+"rank_15": {
+"name": "rank_15",
+"id": "1525432062490706032"
+},
+"i_disperser": {
+"name": "i_disperser",
+"id": "1525434338861383813"
+},
+"i_phylactery": {
+"name": "i_phylactery",
+"id": "1525434342246060093"
+},
+"i_grisgris": {
+"name": "i_grisgris",
+"id": "1525434345756819517"
+},
+"i_angels_demise": {
+"name": "i_angels_demise",
+"id": "1525434348910940222"
 }
 }

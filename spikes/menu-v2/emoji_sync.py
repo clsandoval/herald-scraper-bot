@@ -20,13 +20,12 @@ API = "https://discord.com/api/v10"
 
 
 def wanted():
-    """(name, image_url) for all heroes + final-build items in the fixture."""
-    ms = render.load_matches()
-    heroes, items = set(), set()
-    for m in ms:
-        for p in m["players"]:
-            heroes.add(p["hero_id"])
-            items.update(p["items"])
+    """(name, image_url) for all heroes + items that appear in herald.db."""
+    import sqlite3
+    c = sqlite3.connect(f"file:{HERE}/../../herald.db?mode=ro", uri=True)
+    heroes = {r[0] for r in c.execute("SELECT DISTINCT hero_id FROM match_players")}
+    items = {i for (blob,) in c.execute("SELECT DISTINCT items FROM match_players")
+             for i in json.loads(blob)}
     out = []
     for h in sorted(heroes):
         out.append((f"h_{render.hero_short(h)}", render.hero_icon(h)))

@@ -1,16 +1,20 @@
-"""LIVE Match Board — fully clickable spike.
+"""LIVE Match Board — SQL-backed, exhaustive over herald.db.
 
 Posts one board message to test #replays and keeps running. Every control
-works: sort, multi-filter, group-by + drill, open match, paging, dice,
-advanced modal. State per message in memory (restart = post a new board).
+works: sort, multi-filter, open match, paging, dice,
+advanced modal. Every interaction is a SQL query against herald.db — the
+board covers everything ingest has enriched (10-day retention); raw JSON is
+parsed only for the rows actually displayed.
 
 Run:  DISCORD_BOT_TOKEN=... .venv/bin/python live_board.py
 """
 
 import io
+import json
 import logging
-import random
-from collections import defaultdict
+import pathlib
+import sqlite3
+import sys
 
 import discord
 
@@ -20,101 +24,169 @@ import render
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("live_board")
 
-CHANNEL = 1392724352155254876  # Herald Replays (TEST) #replays — never prod
+import os
+
+# default = Herald Replays (TEST) #replays; prod promotion = flip BOARD_CHANNEL
+CHANNEL = int(os.environ.get("BOARD_CHANNEL", "1392724352155254876"))
 GOLD, GREEN, RED, PURPLE = 0xC8A03C, 0x3BA55D, 0xED4245, 0x9B59B6
 PAGE = 7
 
-MS = render.load_matches()
+REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts"))
+import ingest  # noqa: E402  match_view = the one true row shape
+
+DB_PATH = os.environ.get("HERALD_DB", str(REPO / "herald.db"))
+# ponytail: one read-only conn; discord.py runs all callbacks on one loop thread
+_conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False)
+
+
+def q(sql, params=()):
+    return _conn.execute(sql, params).fetchall()
+
+
+def hydrate(ids):
+    """match_ids -> match_view dicts; raw JSON parsed only for these rows."""
+    if not ids:
+        return []
+    rows = q("SELECT match_id, raw, avg_rank_tier FROM matches"
+             f" WHERE match_id IN ({','.join('?' * len(ids))})", list(ids))
+    by_id = {}
+    for r in rows:
+        v = ingest.match_view(json.loads(r[1]))
+        v["art"] = r[2]  # OpenDota avg_rank_tier 11-15 -> rank medal emoji
+        by_id[r[0]] = v
+    return [by_id[i] for i in ids if i in by_id]
+
+
 STATE = {}  # message_id -> dict
-_thumb_cache = {}
+_thumb_cache = {}  # ponytail: unbounded; fine for a QA process, LRU if it ever matters
 
 
-# ---------------- data: sorts / filters / groups ----------------
+# ---------------- data: sorts / filters / groups as SQL ----------------
 
-def _gap(m):
-    return abs(m["leads"][-1])
+# ponytail: lead-flip counts distilled from raw JSON once at startup (~6s);
+# promote to an ingest column if the sort earns its keep
+_conn.execute("""
+    CREATE TEMP TABLE flips AS
+    SELECT match_id,
+           (SELECT count(*) FROM (
+              SELECT value v, LAG(value) OVER (ORDER BY CAST(key AS INT)) pv
+              FROM json_each(matches.raw, '$.radiantNetworthLeads'))
+            WHERE pv IS NOT NULL AND (v > 0) != (pv > 0)) n
+    FROM matches""")
+_conn.execute("CREATE INDEX temp.idx_flips ON flips(match_id)")
 
+# rapier counts from final inventories (item 133); consumed/lost rapiers don't show
+_conn.execute("""
+    CREATE TEMP TABLE rapiers AS
+    SELECT p.match_id, count(*) n FROM match_players p, json_each(p.items) j
+    WHERE j.value = 133 GROUP BY p.match_id""")
+_conn.execute("CREATE INDEX temp.idx_rapiers ON rapiers(match_id)")
 
-def _max_abs_lead(m):
-    return max(m["max_lead"], -m["min_lead"])
+# watchability = z(kpm) + 0.7*z(lead flips), stats frozen at startup.
+# heroDamage isn't enriched yet — add to the formula after the re-enrich sweep.
+import math  # noqa: E402
+_ST = q("SELECT avg(kpm), avg(kpm*kpm), (SELECT avg(n) FROM flips), (SELECT avg(n*n) FROM flips) FROM matches")[0]
+_KPM_A, _KPM_S = _ST[0], math.sqrt(_ST[1] - _ST[0] ** 2)
+_FL_A, _FL_S = _ST[2], math.sqrt(_ST[3] - _ST[2] ** 2)
+# z(kpm) capped at +2 so freak 15-min bloodbaths can't drown out the flip term
+_SPICE = (f"(min((kpm - {_KPM_A:.3f}) / {_KPM_S:.3f}, 2.0)"
+          f" + 0.7 * ((SELECT n FROM flips f WHERE f.match_id = matches.match_id) - {_FL_A:.3f}) / {_FL_S:.3f})")
 
-
-SORTS = {
-    "spice": ("Most watchable (deaths + kills + throws)",
-              lambda m: -(max(0, m["feeder"]["d"] - 10) * 3 + max(0, m["kills"] - 70) // 5
-                          + min(m["comeback_gold"], 20000) // 1500 + max(0, m["mins"] - 40))),
-    "new": ("Newest", lambda m: -(m["start"] or 0)),
-    "kills": ("Most total kills", lambda m: -m["kills"]),
-    "kpm": ("Most kills per minute", lambda m: -m["kpm"]),
-    "dur": ("Longest game", lambda m: -m["duration"]),
-    "short": ("Shortest game", lambda m: m["duration"]),
-    "feed": ("Most deaths by one player", lambda m: -m["feeder"]["d"]),
-    "throw": ("Biggest gold lead lost by the loser", lambda m: -_throw_size(m)),
-    "cb": ("Biggest gold deficit overcome by the winner", lambda m: -m["comeback_gold"]),
-    "close": ("Smallest gold lead all game", _max_abs_lead),
-    "stomp": ("Biggest final gold gap", lambda m: -_gap(m)),
-    "gpm": ("Highest single-player GPM", lambda m: -max(p["gpm"] for p in m["players"])),
+# direction-neutral metrics; the ⬆/⬇ nav button supplies ASC/DESC
+SORTS = {  # key -> (label, ORDER BY expr)
+    "spice": ("Watchability (kills/min + lead flips)", _SPICE),
+    "kills": ("Total kills", "kills"),
+    "kpm": ("Kills per minute", "kpm"),
+    "dur": ("Match time", "duration_s"),
+    "close": ("Peak gold lead", "max(max_lead, -min_lead)"),
+    "stomp": ("Final gold gap", "abs(final_lead)"),
+    "gpm": ("Highest single-player GPM", "max_gpm"),
+    "flips": ("Times the networth lead flipped",
+              "(SELECT n FROM flips f WHERE f.match_id = matches.match_id)"),
+    "rapiers": ("Divine Rapiers held at game end",
+                "coalesce((SELECT n FROM rapiers r WHERE r.match_id = matches.match_id), 0)"),
+    "rank": ("Average rank", "avg_rank_tier"),
 }
+# picking a new primary sort resets direction to its natural default
+PREF_DIR = {"rank": "ASC"}  # lowest-rank games are the draw
 
+# ponytail: "uncommon" = the 10 least-picked heroes, frozen at startup (~15% of matches)
+_RARE_IDS = ",".join(str(r[0]) for r in q(
+    "SELECT hero_id FROM match_players GROUP BY hero_id ORDER BY count(*) LIMIT 10"))
 
-def _throw_size(m):
-    return m["max_lead"] if not m["radiant_win"] else -m["min_lead"]
-
-
-def _has_rapier(m):
-    return any(render.item_key(i) == "rapier" for p in m["players"] for i in p["items"])
-
-
-FILTERS = {
-    "blood": ("100+ total kills", lambda m: m["kills"] >= 100),
-    "fight": ("80+ total kills", lambda m: m["kills"] >= 80),
-    "war": ("Longer than 40 min", lambda m: m["mins"] >= 40),
-    "speed": ("Shorter than 20 min", lambda m: m["mins"] < 20),
-    "feed": ("A player died 15+ times", lambda m: m["feeder"]["d"] >= 15),
-    "throw": ("Loser had a 5k+ gold lead at some point", lambda m: _throw_size(m) >= 5000),
-    "cb": ("Winner was 10k+ gold behind at some point", lambda m: m["comeback_gold"] >= 10000),
-    "close": ("Gold lead never passed 5k", lambda m: _max_abs_lead(m) < 5000),
-    "stomp": ("One side led start to finish", lambda m: m["max_lead"] <= 2000 or m["min_lead"] >= -2000),
-    "rwin": ("Radiant won", lambda m: m["radiant_win"]),
-    "dwin": ("Dire won", lambda m: not m["radiant_win"]),
-    "rapier": ("Divine Rapier was bought", _has_rapier),
+FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
+    "rare": ("Features a rarely-picked hero",
+             "EXISTS (SELECT 1 FROM match_players p WHERE p.match_id = matches.match_id"
+             f" AND p.hero_id IN ({_RARE_IDS}))"),
+    "lowrank": ("Average rank below Herald 3", "matches.avg_rank_tier < 13"),
+    "highrank": ("Average rank Herald 3 or above", "matches.avg_rank_tier >= 13"),
 }
+# threshold families: picking two of a kind just ANDs to the stricter one
+for _t in (60, 70, 80):
+    FILTERS[f"war{_t}"] = (f"Longer than {_t} min", f"matches.duration_s >= {_t * 60}")
+FILTERS["speed20"] = ("Shorter than 20 min", "matches.duration_s < 1200")
 
-_HOUR = lambda m: f"{((m['start'] or 0) // 3600) % 24:02d}:00 UTC"
-
-GROUPS = {
-    "hero": ("Hero", None),  # special: per-player expansion
-    "star": ("Star player's hero", lambda m: render.hero_name(render.star_of(m)["hero_id"])),
-    "role": ("Star player's role", lambda m: (render.star_of(m)["position"] or "?").replace("POSITION_", "pos ")),
-    "dur": ("Game length", lambda m: "<20 min" if m["mins"] < 20 else "20-30 min" if m["mins"] < 30 else "30-40 min" if m["mins"] < 40 else "40+ min"),
-    "kills": ("Total kills", lambda m: "<60" if m["kills"] < 60 else "60-79" if m["kills"] < 80 else "80-99" if m["kills"] < 100 else "100+"),
-    "feed": ("Worst feeder's deaths", lambda m: "<10" if m["feeder"]["d"] < 10 else "10-14" if m["feeder"]["d"] < 15 else "15+"),
-    "throw": ("Gold lead lost by the loser", lambda m: "none" if _throw_size(m) < 2000 else "2-5k" if _throw_size(m) < 5000 else "5k+"),
-    "cb": ("Gold deficit overcome by winner", lambda m: "none" if m["comeback_gold"] < 2000 else "2-10k" if m["comeback_gold"] < 10000 else "10k+"),
-    "gap": ("Final gold gap", lambda m: "<5k" if _gap(m) < 5000 else "5-15k" if _gap(m) < 15000 else "15k+"),
-    "side": ("Winning side", lambda m: "Radiant" if m["radiant_win"] else "Dire"),
-    "rank": ("Rank", lambda m: f"Herald {max(1, (m['rank'] or 13) % 10)}" if m["rank"] else "Herald ?"),
-    "day": ("Day", lambda m: "Thu Jul 9"),
-    "hour": ("Hour", _HOUR),
-    "item": ("Notable items", lambda m: "Divine Rapier" if _has_rapier(m) else "none"),
-    "towers": ("Towers the winner lost", lambda m: str(sum(1 for t in m["tower_deaths"] if t["isRadiant"] == m["radiant_win"]))),
-}
+# option-label counts over the whole table, computed once at startup
+FILT_COUNTS = dict(zip(FILTERS, q(
+    "SELECT " + ", ".join(f"sum({e})" for _, e in FILTERS.values()) + " FROM matches")[0]))
 
 
 def default_state():
-    return {"mode": "list", "sort": "spice", "filters": [], "group": None,
-            "bucket": None, "page": 0, "match": None, "adv": None}
+    return {"mode": "list", "sort": ["spice"], "dir": "DESC", "filters": [],
+            "page": 0, "match": None, "adv": None, "spoiler": False}
 
 
-def select_matches(st):
-    ms = [m for m in MS if all(FILTERS[f][1](m) for f in st["filters"])]
-    if st["group"] and st["bucket"] is not None:
-        if st["group"] == "hero":
-            ms = [m for m in ms if any(p["hero_id"] == int(st["bucket"]) for p in m["players"])]
-        else:
-            ms = [m for m in ms if GROUPS[st["group"]][1](m) == st["bucket"]]
-    ms.sort(key=SORTS[st["sort"]][1])
-    return ms
+def adv_conds(a):
+    """Advanced-modal criteria as WHERE fragments (ops/ints are whitelisted/cast)."""
+    conds = []
+    if a.get("dur"):
+        op, n = a["dur"]
+        conds.append(f"(matches.duration_s / 60 {op} {int(n)})")
+    if a.get("min_kills"):
+        conds.append(f"(matches.kills >= {int(a['min_kills'])})")
+    if a.get("rank"):
+        op, n = a["rank"]
+        conds.append(f"(matches.avg_rank_tier {op} {int(n)})")
+    hero_ids = {r[0] for r in q("SELECT DISTINCT hero_id FROM match_players")}
+    for h in a.get("heroes") or []:
+        ids = [hid for hid in hero_ids if h in render.hero_name(hid).lower()]
+        conds.append(
+            "EXISTS (SELECT 1 FROM match_players p WHERE p.match_id = matches.match_id"
+            f" AND p.hero_id IN ({','.join(map(str, ids))}))" if ids else "(0)")
+    for key, n in a.get("items") or []:
+        ids = [iid for iid, it in render._item_by_id.items() if key in it["key"]]
+        conds.append(
+            "((SELECT count(*) FROM match_players p, json_each(p.items) j"
+            f" WHERE p.match_id = matches.match_id AND j.value IN ({','.join(map(str, ids))}))"
+            f" >= {int(n)})" if ids else "(0)")
+    return conds
+
+
+def build_where(st):
+    conds = [FILTERS[f][1] for f in st["filters"]]
+    if st.get("adv"):
+        conds += adv_conds(st["adv"])
+    return (" WHERE " + " AND ".join(conds)) if conds else "", []
+
+
+def select_page(st):
+    where, params = build_where(st)
+    total, lo, hi = q(f"SELECT count(*), min(start_time), max(start_time) FROM matches{where}",
+                      params)[0]
+    span = ""
+    if lo:
+        import datetime
+        f = lambda t: datetime.datetime.utcfromtimestamp(t).strftime("%b %-d")
+        span = f(lo) if f(lo) == f(hi) else f"{f(lo)} – {f(hi)}"
+    order = ", ".join(f"{SORTS[k][1]} {st['dir']}" for k in st["sort"])
+    rows = q(f"SELECT match_id FROM matches{where} ORDER BY {order}"
+             " LIMIT ? OFFSET ?", params + [PAGE, st["page"] * PAGE])
+    return total, hydrate([r[0] for r in rows]), span
+
+
+def random_match_id():
+    return q("SELECT match_id FROM matches ORDER BY RANDOM() LIMIT 1")[0][0]
 
 
 # ---------------- rendering ----------------
@@ -125,11 +197,19 @@ def thumb(m):
     return _thumb_cache[m["id"]]
 
 
-def _row_section(m):
+def rank_emoji(tier):
+    e = render._emoji.get(f"rank_{tier}")
+    return f"<:{e['name']}:{e['id']}> " if e else ""
+
+
+def _row_section(m, n=None):
     r = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if p["is_radiant"])
     d = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if not p["is_radiant"])
+    num = f"`{n}` · " if n else ""
     return discord.ui.Section(
-        discord.ui.TextDisplay(f"**{m['kills']}** kills · `{render.dur(m['duration'])}`\n{r} ⚔ {d}"),
+        discord.ui.TextDisplay(
+            f"{num}{rank_emoji(m.get('art'))}`{m['id']}` · **{m['kills']}** kills"
+            f" · `{render.dur(m['duration'])}`\n{r} ⚔ {d}"),
         accessory=discord.ui.Thumbnail(f"attachment://t{m['id']}.png"),
     )
 
@@ -154,8 +234,7 @@ class Board(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.st = st
         self.files = []
-        build = {"list": self._list, "group": self._group, "focus": self._focus,
-                 "adv": self._adv_results}[st["mode"]]
+        build = {"list": self._list, "focus": self._focus}[st["mode"]]
         build()
 
     # ---- interactions plumbing ----
@@ -168,45 +247,42 @@ class Board(discord.ui.LayoutView):
         log.info(f"{itx.user} -> {changes}")
 
     # ---- list mode ----
-    def _controls(self, ms):
+    def _controls(self, page_ms):
         st = self.st
-        sort_opts = [discord.SelectOption(label=v[0], value=k, default=(k == st["sort"]))
+        sort_opts = [discord.SelectOption(label=v[0], value=k, default=(k in st["sort"]))
                      for k, v in SORTS.items()]
         filt_opts = [discord.SelectOption(
-            label=f"{v[0]} ({sum(1 for m in MS if v[1](m))})", value=k,
+            label=f"{v[0]} ({FILT_COUNTS[k]})", value=k,
             default=(k in st["filters"])) for k, v in FILTERS.items()]
-        group_opts = ([discord.SelectOption(label="Off", value="off")] +
-                      [discord.SelectOption(label=v[0], value=k) for k, v in GROUPS.items()])
+        # ponytail: spoiler mode rides in the filter menu — no room for a 6th nav button
+        filt_opts.append(discord.SelectOption(label="🙈 Spoiler mode — hide winners",
+                                              value="spoiler", default=st["spoiler"]))
+        base = st["page"] * PAGE
+
         open_opts = [discord.SelectOption(
-            label=f"{render.dur(m['duration'])} · {m['kills']} kills · "
-                  f"{render.hero_name(render.star_of(m)['hero_id'])} "
-                  f"{render.star_of(m)['k']}/{render.star_of(m)['d']}/{render.star_of(m)['a']}",
-            value=str(m["id"])) for m in ms[st["page"] * PAGE:][:PAGE]] or [
+            label=f"{base + i} · {m['id']} · {render.dur(m['duration'])} · {m['kills']} kills",
+            emoji=(discord.PartialEmoji.from_str(e.strip()) if (e := rank_emoji(m.get("art"))) else None),
+            value=str(m["id"])) for i, m in enumerate(page_ms, 1)] or [
             discord.SelectOption(label="no matches", value="none")]
 
         async def on_sort(itx):
-            await self._update(itx, sort=(sel_sort.values or ["spice"])[0], page=0)
+            vals = list(sel_sort.values) or ["spice"]
+            await self._update(itx, sort=vals, dir=PREF_DIR.get(vals[0], "DESC"), page=0)
 
         async def on_filter(itx):
-            await self._update(itx, filters=list(sel_filt.values), page=0)
-
-        async def on_group(itx):
-            v = (sel_group.values or ["off"])[0]
-            if v == "off":
-                await self._update(itx, group=None, bucket=None, mode="list", page=0)
-            else:
-                await self._update(itx, group=v, bucket=None, mode="group", page=0)
+            vals = list(sel_filt.values)
+            await self._update(itx, filters=[v for v in vals if v != "spoiler"],
+                               spoiler=("spoiler" in vals), page=0)
 
         async def on_open(itx):
             v = sel_open.values[0]
             if v != "none":
                 await self._update(itx, match=int(v), mode="focus")
 
-        sel_sort = _sel("mb_sort", "Sort", sort_opts, on_sort)
+        sel_sort = _sel("mb_sort", "Sort (pick 1+, ties break left to right)", sort_opts, on_sort, multi=True)
         sel_filt = _sel("mb_filt", "Filters (pick any)", filt_opts, on_filter, multi=True)
-        sel_group = _sel("mb_group", "Group by", group_opts, on_group)
         sel_open = _sel("mb_open", "Open a match", open_opts, on_open)
-        return sel_sort, sel_filt, sel_group, sel_open
+        return sel_sort, sel_filt, sel_open
 
     def _nav_row(self, pages):
         st = self.st
@@ -218,14 +294,18 @@ class Board(discord.ui.LayoutView):
             await self._update(itx, page=min(pages - 1, st["page"] + 1))
 
         async def dice(itx):
-            await self._update(itx, match=random.choice(MS)["id"], mode="focus")
+            await self._update(itx, match=random_match_id(), mode="focus")
 
         async def adv(itx):
             await itx.response.send_modal(AdvModal(self.st))
 
+        async def flip(itx):
+            await self._update(itx, dir=("ASC" if st["dir"] == "DESC" else "DESC"), page=0)
+
         row = discord.ui.ActionRow(
             _btn("mb_pp", "◀", prev),
             _btn("mb_pn", f"{st['page'] + 1}/{max(pages, 1)} ▶", nxt),
+            _btn("mb_dir", "⬇ high→low" if st["dir"] == "DESC" else "⬆ low→high", flip),
             _btn("mb_dice", "🎲", dice, style=discord.ButtonStyle.primary),
             _btn("mb_adv", "⚙️ Advanced", adv),
         )
@@ -233,94 +313,45 @@ class Board(discord.ui.LayoutView):
 
     def _list(self):
         st = self.st
-        ms = select_matches(st)
-        pages = max(1, (len(ms) + PAGE - 1) // PAGE)
-        page = ms[st["page"] * PAGE:][:PAGE]
+        total, page, span = select_page(st)
+        pages = max(1, (total + PAGE - 1) // PAGE)
         self.files = [(f"t{m['id']}.png", thumb(m)) for m in page]
+        span_txt = f" · {span}" if span else ""
         filt_txt = f" · filters: {len(st['filters'])}" if st["filters"] else ""
-        bucket_txt = f" · {st['bucket']}" if st["bucket"] else ""
+        adv_txt = " · ⚙️ advanced on (submit empty form to clear)" if st["adv"] else ""
+        sp_txt = " · 🙈 spoilers hidden" if st["spoiler"] else ""
         c = discord.ui.Container(accent_colour=discord.Colour(GOLD))
-        c.add_item(discord.ui.TextDisplay(f"## 🎛️ MATCH BOARD\n-# {len(ms)} matches{filt_txt}{bucket_txt}"))
+        c.add_item(discord.ui.TextDisplay(
+            f"## HERALD MATCH BOARD\n-# {total} matches{span_txt}{filt_txt}{adv_txt}{sp_txt}"))
         c.add_item(discord.ui.Separator())
-        for m in page:
-            c.add_item(_row_section(m))
+        for i, m in enumerate(page, 1 + st["page"] * PAGE):
+            c.add_item(_row_section(m, i))
         if not page:
             c.add_item(discord.ui.TextDisplay("no matches — clear a filter"))
         c.add_item(discord.ui.Separator())
-        sel_sort, sel_filt, sel_group, sel_open = self._controls(ms)
-        for s in (sel_sort, sel_filt, sel_group, sel_open):
+        sel_sort, sel_filt, sel_open = self._controls(page)
+        for s in (sel_sort, sel_filt, sel_open):
             c.add_item(discord.ui.ActionRow(s))
         c.add_item(self._nav_row(pages))
         self.add_item(c)
 
-    # ---- group mode ----
-    def _group(self):
-        st = self.st
-        g = st["group"]
-        ms = [m for m in MS if all(FILTERS[f][1](m) for f in st["filters"])]
-        c = discord.ui.Container(accent_colour=discord.Colour(PURPLE))
-        c.add_item(discord.ui.TextDisplay(f"## 🎛️ MATCH BOARD\n-# grouped by {GROUPS[g][0].lower()}"))
-        c.add_item(discord.ui.Separator())
-        if g == "hero":
-            agg = defaultdict(lambda: {"n": 0, "w": 0, "d": 0})
-            for m in ms:
-                for p in m["players"]:
-                    a = agg[p["hero_id"]]
-                    a["n"] += 1
-                    a["w"] += (p["is_radiant"] == m["radiant_win"])
-                    a["d"] += p["d"]
-            top = sorted(agg.items(), key=lambda kv: -kv[1]["n"])[:10]
-            rows = "\n".join(
-                f"{render.hero_emoji(h) or '•'} **{render.hero_name(h)}** · {a['n']} games · "
-                f"{a['w'] * 100 // a['n']}% win · {a['d'] / a['n']:.1f} avg deaths" for h, a in top)
-            opts = [discord.SelectOption(label=f"{render.hero_name(h)} ({a['n']})", value=str(h))
-                    for h, a in top]
-        else:
-            buckets = defaultdict(list)
-            for m in ms:
-                buckets[GROUPS[g][1](m)].append(m)
-            items = sorted(buckets.items(), key=lambda kv: -len(kv[1]))[:12]
-            rows = "\n".join(
-                f"**{b}** · {len(bs)} matches · avg {sum(m['kills'] for m in bs) // len(bs)} kills · "
-                f"max {max(m['kills'] for m in bs)}" for b, bs in items)
-            opts = [discord.SelectOption(label=f"{b} ({len(bs)})", value=str(b)) for b, bs in items]
-        c.add_item(discord.ui.TextDisplay(rows or "no data"))
-        c.add_item(discord.ui.Separator())
-
-        async def on_drill(itx):
-            await self._update(itx, bucket=drill.values[0], mode="list", page=0)
-
-        async def on_group(itx):
-            v = (regroup.values or ["off"])[0]
-            if v == "off":
-                await self._update(itx, group=None, bucket=None, mode="list")
-            else:
-                await self._update(itx, group=v, bucket=None, mode="group")
-
-        drill = _sel("mb_drill", "Open a bucket", opts, on_drill)
-        regroup = _sel("mb_regroup", f"Group by: {GROUPS[g][0].lower()}",
-                       [discord.SelectOption(label="Off", value="off")] +
-                       [discord.SelectOption(label=v[0], value=k) for k, v in GROUPS.items()], on_group)
-        c.add_item(discord.ui.ActionRow(regroup))
-        c.add_item(discord.ui.ActionRow(drill))
-
-        async def back(itx):
-            await self._update(itx, group=None, bucket=None, mode="list")
-
-        c.add_item(discord.ui.ActionRow(_btn("mb_back", "◀ Board", back)))
-        self.add_item(c)
-
     # ---- focus / graph ----
     def _focus(self):
-        m = next(x for x in MS if x["id"] == self.st["match"])
+        m = hydrate([self.st["match"]])[0]
         self.files = [(f"g{m['id']}.png", charts.networth_lead_png(
             m["leads"], f"Match {m['id']} — Net Worth Lead"))]
         r = sorted([p for p in m["players"] if p["is_radiant"]], key=lambda p: -p["networth"])
         d = sorted([p for p in m["players"] if not p["is_radiant"]], key=lambda p: -p["networth"])
-        win = "🟢 Radiant win" if m["radiant_win"] else "🔴 Dire win"
-        c = discord.ui.Container(accent_colour=discord.Colour(GREEN if m["radiant_win"] else RED))
-        c.add_item(discord.ui.TextDisplay(
-            f"## Match {m['id']} · {win} · `{render.dur(m['duration'])}` · 🟢 {m['kills_r']} — {m['kills_d']} 🔴"))
+        sp = self.st.get("spoiler")
+        if sp:
+            head = f"## Match {m['id']} · `{render.dur(m['duration'])}` · ⚔ {m['kills']} kills"
+            c = discord.ui.Container(accent_colour=discord.Colour(GOLD))
+        else:
+            win = "🟢 Radiant win" if m["radiant_win"] else "🔴 Dire win"
+            head = (f"## Match {m['id']} · {win} · `{render.dur(m['duration'])}`"
+                    f" · 🟢 {m['kills_r']} — {m['kills_d']} 🔴")
+            c = discord.ui.Container(accent_colour=discord.Colour(GREEN if m["radiant_win"] else RED))
+        c.add_item(discord.ui.TextDisplay(head))
         c.add_item(discord.ui.TextDisplay("**Radiant**\n" + "\n".join(render.player_line(p) for p in r)))
         c.add_item(discord.ui.Separator())
         c.add_item(discord.ui.TextDisplay("**Dire**\n" + "\n".join(render.player_line(p) for p in d)))
@@ -332,7 +363,7 @@ class Board(discord.ui.LayoutView):
             await self._update(itx, mode="list", match=None)
 
         async def dice(itx):
-            await self._update(itx, match=random.choice(MS)["id"])
+            await self._update(itx, match=random_match_id())
 
         c.add_item(discord.ui.ActionRow(
             _btn("mb_b", "◀ Board", back),
@@ -341,60 +372,30 @@ class Board(discord.ui.LayoutView):
         ))
         self.add_item(c)
 
-    # ---- advanced results ----
-    def _adv_results(self):
-        a = self.st["adv"]
-        scored = []
-        for m in MS:
-            crits = [m["mins"] >= a["min_dur"], m["kills"] >= a["min_kills"],
-                     all(any(h in render.hero_name(p["hero_id"]).lower() for p in m["players"])
-                         for h in a["heroes"]) if a["heroes"] else True,
-                     _item_count_ok(m, a["items"])]
-            scored.append((sum(crits), m))
-        scored.sort(key=lambda t: (-t[0], -t[1]["kills"]))
-        exact = [m for s, m in scored if s == 4]
-        show = exact[:PAGE] if exact else [m for _, m in scored[:3]]
-        self.files = [(f"t{m['id']}.png", thumb(m)) for m in show]
-        head = (f"{len(exact)} exact matches" if exact
-                else "0 exact matches · showing 3 closest")
-        c = discord.ui.Container(accent_colour=discord.Colour(GOLD))
-        c.add_item(discord.ui.TextDisplay(f"## 🎛️ MATCH BOARD\n-# {head}"))
-        c.add_item(discord.ui.Separator())
-        for m in show:
-            c.add_item(_row_section(m))
-        c.add_item(discord.ui.Separator())
 
-        async def on_open(itx):
-            await self._update(itx, match=int(op.values[0]), mode="focus")
-
-        op = _sel("mb_aopen", "Open a match", [discord.SelectOption(
-            label=f"{render.dur(m['duration'])} · {m['kills']} kills", value=str(m["id"]))
-            for m in show], on_open)
-        c.add_item(discord.ui.ActionRow(op))
-
-        async def edit(itx):
-            await itx.response.send_modal(AdvModal(self.st))
-
-        async def clear(itx):
-            await self._update(itx, adv=None, mode="list", page=0)
-
-        c.add_item(discord.ui.ActionRow(
-            _btn("mb_ae", "⚙️ Edit search", edit), _btn("mb_ac", "✕ Clear", clear)))
-        self.add_item(c)
-
-
-def _item_count_ok(m, items):
-    for key, n in items:
-        have = sum(1 for p in m["players"] for i in p["items"]
-                   if key in (render.item_key(i) or ""))
-        if have < n:
-            return False
-    return True
+def parse_cmp(v, default_op=">="):
+    """'>70' / '<=13' / '70' -> (op, int) with op whitelisted; None when empty/junk."""
+    s = str(v or "").strip().replace(" ", "")
+    if not s:
+        return None
+    for op in (">=", "<=", "=", ">", "<"):
+        if s.startswith(op):
+            s, use = s[len(op):], op
+            break
+    else:
+        use = default_op
+    try:
+        return (use, int(s))
+    except ValueError:
+        return None
 
 
 class AdvModal(discord.ui.Modal, title="Advanced search"):
-    min_dur = discord.ui.TextInput(label="Min duration (minutes)", required=False, placeholder="90")
+    dur = discord.ui.TextInput(label="Duration in minutes (e.g. >70 or <20)", required=False,
+                               placeholder=">70")
     min_kills = discord.ui.TextInput(label="Min total kills", required=False, placeholder="90")
+    rank = discord.ui.TextInput(label="Avg rank tier 11-15 (13 = Herald 3)",
+                                required=False, placeholder="<13")
     heroes = discord.ui.TextInput(label="Heroes (comma separated, all must play)", required=False,
                                   placeholder="largo, treant")
     items = discord.ui.TextInput(label="Items (name xCount, comma separated)", required=False,
@@ -421,28 +422,58 @@ class AdvModal(discord.ui.Modal, title="Advanced search"):
                 items.append((name.strip().replace(" ", "_"), num(n) or 1))
             else:
                 items.append((part.replace(" ", "_"), 1))
-        adv = {"min_dur": num(self.min_dur.value), "min_kills": num(self.min_kills.value),
+        adv = {"dur": parse_cmp(self.dur.value), "min_kills": num(self.min_kills.value),
+               "rank": parse_cmp(self.rank.value, default_op="<="),
                "heroes": [h.strip().lower() for h in str(self.heroes.value or "").split(",") if h.strip()],
                "items": items}
-        self.st.update(adv=adv, mode="adv")
+        if not (adv["dur"] or adv["min_kills"] or adv["rank"] or adv["heroes"] or adv["items"]):
+            adv = None  # empty form = clear advanced criteria
+        # advanced criteria are extra WHERE conds on the normal list — sorting
+        # and paging keep working on top of them
+        self.st.update(adv=adv, mode="list", page=0)
         STATE[itx.message.id] = self.st
         nv = Board(self.st)
         files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
-        # defer + explicit message edit: the robust path for modal submits
-        await itx.response.defer()
-        await itx.message.edit(view=nv, attachments=files)
+        # response.edit_message works for channel AND ephemeral boards; the old
+        # defer + message.edit path breaks on ephemerals
+        await itx.response.edit_message(view=nv, attachments=files)
         log.info(f"{itx.user} advanced: {adv}")
 
 
 # ---------------- bot ----------------
 
 client = discord.Client(intents=discord.Intents.default())
+tree = discord.app_commands.CommandTree(client)
+
+
+@tree.command(name="board", description="Open a private Herald match board only you can see")
+async def board_cmd(itx: discord.Interaction):
+    st = default_state()
+    v = Board(st)
+    files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
+    await itx.response.send_message(view=v, files=files, ephemeral=True)
+    msg = await itx.original_response()
+    STATE[msg.id] = st
+    log.info(f"{itx.user} opened a private board")
 
 
 @client.event
 async def on_ready():
     log.info(f"logged in as {client.user}")
+    for g in client.guilds:
+        tree.copy_global_to(guild=g)
+        await tree.sync(guild=g)
+    log.info(f"slash commands synced to {len(client.guilds)} guilds")
     ch = client.get_channel(CHANNEL) or await client.fetch_channel(CHANNEL)
+    # replace any board we posted before a restart — only components-v2 messages,
+    # never the bot's plain-text posts (same account as the old daily reporter)
+    async for old in ch.history(limit=30):
+        if old.author == client.user and old.flags.value & 32768:
+            try:
+                await old.delete()
+                log.info(f"deleted stale board {old.id}")
+            except discord.HTTPException as e:
+                log.warning(f"stale board delete failed: {e}")
     st = default_state()
     v = Board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]

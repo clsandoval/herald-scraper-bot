@@ -59,16 +59,21 @@ STRATZ_BATCH = int(os.environ.get("STRATZ_BATCH", "25"))
 STRATZ_FIELDS = """
     id durationSeconds startDateTime didRadiantWin gameMode rank bracket
     radiantKills direKills radiantNetworthLeads radiantExperienceLeads
-    topLaneOutcome midLaneOutcome bottomLaneOutcome
+    topLaneOutcome midLaneOutcome bottomLaneOutcome firstBloodTime numHumanPlayers
     towerDeaths { time isRadiant }
     players {
       heroId isRadiant leaverStatus kills deaths assists networth goldPerMinute
       experiencePerMinute numLastHits numDenies lane role position
+      heroDamage towerDamage heroHealing level partyId intentionalFeeding
+      dotaPlusHeroXp
+      steamAccount { seasonRank smurfFlag dotaAccountLevel }
       item0Id item1Id item2Id item3Id item4Id item5Id
       backpack0Id backpack1Id backpack2Id neutral0Id
-      stats { networthPerMinute itemPurchases { time itemId } }
+      stats { networthPerMinute itemPurchases { time itemId } actionsPerMinute }
     }
 """
+# raw observables only — Stratz's opinion fields (imp/award/analysisOutcome/
+# predicted*) stay out: watchability scoring is our own IP
 
 
 # --- SCHEMA ---
@@ -84,7 +89,8 @@ def init_db(conn):
           avg_rank_tier INTEGER, kills_r INTEGER, kills_d INTEGER, kills INTEGER, kpm REAL,
           max_lead INTEGER, min_lead INTEGER, final_lead INTEGER, comeback_gold INTEGER,
           throw_gold INTEGER, feeder_deaths INTEGER, top_kills INTEGER, max_gpm INTEGER,
-          winner_towers_lost INTEGER, has_rapier INTEGER, raw TEXT, enriched_at INTEGER)
+          winner_towers_lost INTEGER, has_rapier INTEGER, raw TEXT, enriched_at INTEGER,
+          lead_flips INTEGER, hero_damage INTEGER)
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_matches_start ON matches(start_time)")
@@ -93,10 +99,20 @@ def init_db(conn):
         CREATE TABLE IF NOT EXISTS match_players (
           match_id INTEGER, slot INTEGER, hero_id INTEGER, is_radiant INTEGER,
           kills INTEGER, deaths INTEGER, assists INTEGER, networth INTEGER, gpm INTEGER,
-          position TEXT, items TEXT, PRIMARY KEY (match_id, slot))
+          position TEXT, items TEXT, hero_damage INTEGER, season_rank INTEGER,
+          dota_plus_xp INTEGER, PRIMARY KEY (match_id, slot))
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_players_hero ON match_players(hero_id)")
+    # migrate pre-existing DBs (ALTER is a no-op error when the column exists)
+    for table, col in [("matches", "lead_flips INTEGER"), ("matches", "hero_damage INTEGER"),
+                       ("match_players", "hero_damage INTEGER"),
+                       ("match_players", "season_rank INTEGER"),
+                       ("match_players", "dota_plus_xp INTEGER")]:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS pending (
@@ -182,12 +198,16 @@ def derived_cols(raw):
     )
     has_rapier = 1 if any(i == RAPIER_ID for p in v["players"] for i in p["items"]) else 0
     final_lead = v["leads"][-1]
+    leads = v["leads"]
+    lead_flips = sum(1 for a, b in zip(leads, leads[1:]) if (a > 0) != (b > 0))
+    hero_damage = sum(p.get("heroDamage") or 0 for p in raw["players"])
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
         "comeback_gold": v["comeback_gold"], "throw_gold": throw_gold,
         "feeder_deaths": feeder_deaths, "top_kills": top_kills, "max_gpm": max_gpm,
         "winner_towers_lost": winner_towers_lost, "has_rapier": has_rapier,
+        "lead_flips": lead_flips, "hero_damage": hero_damage,
     }
 
 
@@ -202,8 +222,8 @@ def upsert_match(conn, raw, avg_rank_tier):
           match_id, start_time, duration_s, radiant_win, game_mode, rank, bracket,
           avg_rank_tier, kills_r, kills_d, kills, kpm, max_lead, min_lead, final_lead,
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
-          winner_towers_lost, has_rapier, raw, enriched_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -212,7 +232,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             c["kills_r"], c["kills_d"], c["kills"], c["kpm"], c["max_lead"], c["min_lead"],
             c["final_lead"], c["comeback_gold"], c["throw_gold"], c["feeder_deaths"],
             c["top_kills"], c["max_gpm"], c["winner_towers_lost"], c["has_rapier"],
-            json.dumps(raw), int(time.time()),
+            json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
@@ -222,13 +242,15 @@ def upsert_match(conn, raw, avg_rank_tier):
             """
             INSERT OR REPLACE INTO match_players (
               match_id, slot, hero_id, is_radiant, kills, deaths, assists,
-              networth, gpm, position, items
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              networth, gpm, position, items, hero_damage, season_rank, dota_plus_xp
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 mid, slot, p["heroId"], 1 if p["isRadiant"] else 0,
                 p["kills"], p["deaths"], p["assists"], p.get("networth", 0),
                 p.get("goldPerMinute", 0), p.get("position"), items,
+                p.get("heroDamage"), (p.get("steamAccount") or {}).get("seasonRank"),
+                p.get("dotaPlusHeroXp"),
             ),
         )
     conn.commit()
@@ -362,6 +384,13 @@ def has_abandon(m):
     return any(p.get("leaverStatus") not in LEAVER_OK for p in m.get("players") or [])
 
 
+def has_guardian(m):
+    """Any player ranked above Herald (seasonRank > 15). Anonymous/unranked
+    (None) can't be checked and is allowed through."""
+    return any(((p.get("steamAccount") or {}).get("seasonRank") or 0) > 15
+               for p in m.get("players") or [])
+
+
 def enrich(conn):
     now = int(time.time())
     enriched = 0
@@ -391,9 +420,13 @@ def enrich(conn):
             for mid, art in chunk:
                 m = res.get(mid)
                 ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-                # cut = abandons, mid-length games, low kill density. duration is
-                # also pre-filtered at discovery; kpm/abandon only exist here
-                if ready and (has_abandon(m) or dur_boring(m["durationSeconds"]) or low_kpm(m)):
+                # cut = abandons, non-Herald players, mid-length games, low kill
+                # density. duration is also pre-filtered at discovery
+                if ready and (has_abandon(m) or has_guardian(m)
+                              or dur_boring(m["durationSeconds"]) or low_kpm(m)):
+                    # also evict any stale copy (re-enrich sweeps route through here)
+                    conn.execute("DELETE FROM matches WHERE match_id=?", (mid,))
+                    conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
                     conn.execute("DELETE FROM pending WHERE match_id=?", (mid,))
                     cut += 1
                 elif ready:

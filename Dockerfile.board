@@ -1,0 +1,11 @@
+# Herald board + ingest (v1 SQLite stack). Prod deploy: fly deploy -c fly.board.toml
+FROM python:3.11-slim
+WORKDIR /app
+COPY board-requirements.txt .
+RUN pip install --no-cache-dir -r board-requirements.txt
+COPY scripts/ingest.py scripts/
+COPY spikes/menu-v2/live_board.py spikes/menu-v2/render.py spikes/menu-v2/charts.py spikes/menu-v2/
+COPY spikes/menu-v2/assets spikes/menu-v2/assets
+# ponytail: one machine, ingest backgrounded behind the board — a crash in either
+# restarts both, which is the behavior we want (board re-reads the DB at startup)
+CMD ["sh", "-c", "python -u scripts/ingest.py --loop 1800 & exec python -u spikes/menu-v2/live_board.py"]
