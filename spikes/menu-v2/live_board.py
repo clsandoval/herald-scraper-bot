@@ -38,6 +38,7 @@ import ingest  # noqa: E402  match_view = the one true row shape
 DB_PATH = os.environ.get("HERALD_DB", str(REPO / "herald.db"))
 # ponytail: one read-only conn; discord.py runs all callbacks on one loop thread
 _conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False)
+_conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers at boot — wait, don't die
 
 
 def q(sql, params=()):
@@ -465,7 +466,7 @@ client = discord.Client(intents=discord.Intents.default())
 tree = discord.app_commands.CommandTree(client)
 
 
-@tree.command(name="board", description="Open a private Herald match board only you can see")
+@tree.command(name="heralds", description="Open a private Herald match board only you can see")
 async def board_cmd(itx: discord.Interaction):
     st = default_state()
     v = Board(st)
