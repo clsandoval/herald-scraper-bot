@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
 Plan: 3 of 3 (plan 01-01 complete)
 Status: Ready to execute
-Last activity: 2026-07-10 - Completed quick task 260710-by5: Herald match ingest script (OpenDota → Stratz → SQLite)
+Last activity: 2026-07-11 - Completed quick task 260711-wqo: Board usage telemetry + /heralds hint
 
 Progress: [███████░░░] 67%
 
@@ -82,6 +82,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260710-by5 | Herald match ingest script: OpenDota discovery → Stratz enrichment → local SQLite, 10-day retention | 2026-07-10 | e5385af | [260710-by5-herald-match-ingest-script-opendota-disc](./quick/260710-by5-herald-match-ingest-script-opendota-disc/) |
+| 260711-wqo | Board usage telemetry (ts + Discord user per interaction / /heralds use) into `usage` table + /heralds hint on public board | 2026-07-11 | fcacedf | [260711-wqo-add-usage-telemetry-timestamp-discord-us](./quick/260711-wqo-add-usage-telemetry-timestamp-discord-us/) |
 
 ## Deferred Items
 
