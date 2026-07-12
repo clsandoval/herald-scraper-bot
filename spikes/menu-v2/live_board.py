@@ -164,7 +164,7 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
     "highrank": ("Average rank Herald 3 or above", "matches.avg_rank_tier >= 13"),
     "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
     "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
-    "mastery": ("Has a Dota Plus grandmaster (Master+ badge)", "matches.max_dplus >= 26"),
+    "mastery": ("Has a Dota Plus Master+ badge (25+)", "matches.max_dplus >= 25"),
 }
 # off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
 _W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
@@ -434,13 +434,13 @@ class Board(discord.ui.LayoutView):
                 )
             if lines:
                 c.add_item(discord.ui.TextDisplay("🌀 **Weird skill orders**\n" + "\n".join(lines)))
-        # Dota Plus grandmaster badges — per-player receipt (dplus now in match_view)
-        gm_players = sorted((p for p in m["players"] if p.get("dplus", 0) >= 26),
+        # Dota Plus mastery badges — per-player receipt, Master+ (>=25, matches mastery_avg)
+        gm_players = sorted((p for p in m["players"] if p.get("dplus", 0) >= 25),
                             key=lambda p: -p["dplus"])
         if gm_players:
             lines = [
                 f"{render.hero_emoji(p['hero_id']) or render.hero_name(p['hero_id'])}"
-                f" — GM badge (lvl {p['dplus']})"
+                f" — {'GM' if p['dplus'] >= 26 else 'Master'} badge (lvl {p['dplus']})"
                 for p in gm_players
             ]
             c.add_item(discord.ui.TextDisplay("🏆 **Dota Plus mastery**\n" + "\n".join(lines)))
