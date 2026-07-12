@@ -145,6 +145,8 @@ SORTS = {  # key -> (label, ORDER BY expr)
                 "coalesce((SELECT n FROM rapiers r WHERE r.match_id = matches.match_id), 0)"),
     "rank": ("Average rank", "avg_rank_tier"),
     "weird": ("Build weirdness", "coalesce(weirdness, 0)"),
+    "skillweird": ("Skill-order weirdness", "coalesce(skill_weirdness, 0)"),
+    "mastery": ("Dota Plus mastery (highest badge)", "coalesce(max_dplus, 0)"),
 }
 # picking a new primary sort resets direction to its natural default
 PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
@@ -162,6 +164,7 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
     "highrank": ("Average rank Herald 3 or above", "matches.avg_rank_tier >= 13"),
     "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
     "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
+    "mastery": ("Has a Dota Plus grandmaster (Master+ badge)", "matches.max_dplus >= 26"),
 }
 # off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
 _W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
@@ -418,6 +421,29 @@ class Board(discord.ui.LayoutView):
                 lines.append(f"{render.hero_emoji(note['hero_id']) or render.hero_name(note['hero_id'])} {buys}")
             if lines:
                 c.add_item(discord.ui.TextDisplay("🌀 **Off-meta builds**\n" + "\n".join(lines)))
+        # skill-order weirdness receipts — why this match scores weird on ability picks
+        srow = q("SELECT skill_weirdness, skill_notes FROM matches WHERE match_id=?", (m["id"],))
+        if srow and (srow[0][0] or 0) >= 8 and srow[0][1]:
+            lines = []
+            for note in json.loads(srow[0][1]):
+                picks = ", ".join(f"{name} @pt{idx}" for name, idx, _s in note["picks"])
+                tag = f" — {note['tag']}" if note.get("tag") else ""
+                lines.append(
+                    f"{render.hero_emoji(note['hero_id']) or render.hero_name(note['hero_id'])}"
+                    f" {picks}{tag}"
+                )
+            if lines:
+                c.add_item(discord.ui.TextDisplay("🌀 **Weird skill orders**\n" + "\n".join(lines)))
+        # Dota Plus grandmaster badges — per-player receipt (dplus now in match_view)
+        gm_players = sorted((p for p in m["players"] if p.get("dplus", 0) >= 26),
+                            key=lambda p: -p["dplus"])
+        if gm_players:
+            lines = [
+                f"{render.hero_emoji(p['hero_id']) or render.hero_name(p['hero_id'])}"
+                f" — GM badge (lvl {p['dplus']})"
+                for p in gm_players
+            ]
+            c.add_item(discord.ui.TextDisplay("🏆 **Dota Plus mastery**\n" + "\n".join(lines)))
         g = discord.ui.MediaGallery()
         g.add_item(media=f"attachment://g{m['id']}.png")
         c.add_item(g)

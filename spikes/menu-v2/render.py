@@ -103,6 +103,7 @@ def load_matches():
                 "role": p.get("role"), "position": p.get("position"),
                 "networth_per_min": (p.get("stats") or {}).get("networthPerMinute") or [],
                 "purchases": (p.get("stats") or {}).get("itemPurchases") or [],
+                "dplus": (p.get("dotaPlus") or {}).get("level") or 0,
             })
         feeder = max(players, key=lambda p: p["d"])
         win_r = m["didRadiantWin"]
