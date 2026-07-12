@@ -32,3 +32,4 @@ Emerged from spiking — non-negotiable for the real build:
 | herald-replay-quality | replay-quality skill | standard | Jenkins' taste as computable 0-100 rubric | DRAFTED (design doc) | skill, scoring |
 | menu-v2 | menu-first Components V2 | comparison (6-way) | menu UI feasible + one architecture wins | VALIDATED (Gazette×Browser hybrid) | discord, ui, components-v2 |
 | skill-weirdness | skill-order weirdness signal | comparison (PMI vs rules) | corpus PMI over (hero, mode, skill-index) surfaces genuinely weird builds vs noise; rules baseline; tuned top-20 board eyeballs right | VALIDATED (PMI wins; rules = receipt labels only) | scoring, abilities, weirdness |
+| stratz-signals | unexploited Stratz fields probe | standard | per-field KEEP/SKIP/HEAVY verdicts: chat, deathEvents, wards, itemUsed, barracks, pickBans, etc. — fill rate + payload + receipt-worthiness at Herald | VALIDATED (13 KEEP / 5 SKIP / 2 HEAVY) | api, stratz, enrichment |
