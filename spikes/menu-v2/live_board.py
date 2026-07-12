@@ -146,7 +146,7 @@ SORTS = {  # key -> (label, ORDER BY expr)
     "rank": ("Average rank", "avg_rank_tier"),
     "weird": ("Item build weirdness", "coalesce(weirdness, 0)"),
     "skillweird": ("Skill-order weirdness", "coalesce(skill_weirdness, 0)"),
-    "mastery": ("Dota Plus mastery (avg Master+ badge)", "coalesce(mastery_avg, 0)"),
+    "mastery": ("Dota Plus mastery (total Master+ badges)", "coalesce(mastery_sum, 0)"),
 }
 # picking a new primary sort resets direction to its natural default
 PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
