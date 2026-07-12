@@ -19,7 +19,7 @@ import os
 import sqlite3
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
 import httpx
 
@@ -34,22 +34,21 @@ RAPIER_ID = 133
 # NONE = played through; DISCONNECTED = brief dc but returned (game still valid).
 # Anything else (ABANDONED, AFK, NEVER_CONNECTED*, DISCONNECTED_TOO_LONG) = abandon.
 LEAVER_OK = {None, "NONE", "DISCONNECTED"}
-# 30-60 min = the ordinary-game band, not review material. Keep the short
-# stomps (<30) and the marathon disasters (>60).
-DUR_SKIP_LO = int(os.environ.get("DUR_SKIP_LO", "1800"))
-DUR_SKIP_HI = int(os.environ.get("DUR_SKIP_HI", "3600"))
+# ranked marathons only, >= 50 min: short/ordinary-length games aren't review
+# material, and the >=50min band is where the Herald disasters/comebacks live.
+DUR_MIN = int(os.environ.get("DUR_MIN", "3000"))
 KPM_MIN = float(os.environ.get("KPM_MIN", "1.0"))
 
 
 def dur_boring(seconds):
-    return DUR_SKIP_LO <= seconds <= DUR_SKIP_HI
+    return seconds < DUR_MIN
 
 
 def low_kpm(m):
     kills = sum(m.get("radiantKills") or []) + sum(m.get("direKills") or [])
     return kills / max(m["durationSeconds"] / 60, 1) < KPM_MIN
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "400"))  # safety cap on an Explorer walk
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "10"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
 # ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
 # Default leaves ~1/3 of the quota for anything else using the token.
 STRATZ_DAILY_BUDGET = int(os.environ.get("STRATZ_DAILY_BUDGET", "10000"))
@@ -115,6 +114,7 @@ def init_db(conn):
                        ("matches", "max_party INTEGER"), ("matches", "max_apm INTEGER"),
                        ("matches", "max_dplus INTEGER"), ("matches", "weirdness REAL"),
                        ("matches", "weird_notes TEXT"),
+                       ("matches", "skill_weirdness REAL"), ("matches", "skill_notes TEXT"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -173,6 +173,7 @@ def match_view(raw):
             "role": p.get("role"), "position": p.get("position"),
             "networth_per_min": (p.get("stats") or {}).get("networthPerMinute") or [],
             "purchases": (p.get("stats") or {}).get("itemPurchases") or [],
+            "dplus": (p.get("dotaPlus") or {}).get("level") or 0,
         })
     feeder = max(players, key=lambda p: p["d"])
     win_r = raw["didRadiantWin"]
@@ -343,7 +344,7 @@ def discover(conn, days=RETENTION_DAYS):
                 client,
                 "SELECT match_id, start_time, avg_rank_tier FROM public_matches "
                 f"WHERE avg_rank_tier BETWEEN 10 AND 15 {frontier}"
-                f"AND (duration < {DUR_SKIP_LO} OR duration > {DUR_SKIP_HI}) "
+                f"AND lobby_type = 7 AND duration >= {DUR_MIN} "
                 "ORDER BY match_id DESC LIMIT 1000",
             )
             if rows is None:
@@ -448,7 +449,7 @@ def enrich(conn):
             for mid, art in chunk:
                 m = res.get(mid)
                 ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-                # cut = abandons, non-Herald players, mid-length games, low kill
+                # cut = abandons, non-Herald players, under 50 min, low kill
                 # density. duration is also pre-filtered at discovery
                 if ready and (has_abandon(m) or has_guardian(m)
                               or dur_boring(m["durationSeconds"]) or low_kpm(m)):
@@ -554,6 +555,154 @@ def score_weirdness(conn):
     return n
 
 
+# --- SKILL-ORDER WEIRDNESS (corpus-relative, no network) ---
+# Positional surprisal: -log P(ability | hero, mode, skill-index), sibling of
+# score_weirdness's item PMI. Ported from the validated spike
+# (spikes/skill-weirdness/pmi2.py + rules.py + tune.py) — logic only, not the
+# spike's file I/O (reads raw from the matches table instead of abil.tsv.gz).
+
+def score_skill_weirdness(conn):
+    ability_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "spikes", "menu-v2", "assets", "ability_ids.json")
+    ability_names = json.load(open(ability_path))
+    ability_names.pop("0", None)  # dota_base_ability, Stratz null placeholder
+
+    # Ranked-only discovery (NEW LOCKED decision A) makes gameMode effectively
+    # single-valued going forward; the mode-keyed stats below and this
+    # exclusion list are kept anyway as cheap no-op robustness for pre-purge
+    # rows and any future mode drift.
+    EXCLUDE_MODES = {"SINGLE_DRAFT", "RANDOM_DRAFT"}
+
+    def build_skills(p):
+        return [e["abilityId"] for e in (p.get("abilities") or [])
+                if not e.get("isTalent") and e.get("abilityId")][:12]
+
+    def label(sk, ult):
+        """Human tag for a weird build — receipt decoration, not scoring."""
+        tags = []
+        if ult is not None and ult in sk and sk.index(ult) <= 4:
+            tags.append(f"ult as pick {sk.index(ult) + 1}")
+        if ult is not None and ult not in sk and len(sk) >= 10:
+            tags.append("never skilled ult")
+        if len(sk) >= 3 and sk[0] == sk[1] == sk[2]:
+            tags.append(f"opened {ability_names.get(str(sk[0]), sk[0]).split('_')[-1]} x3")
+        return ", ".join(tags)
+
+    # Pass 1: hero ability pools + corpus-derived ults, mode-agnostic (kits
+    # don't vary by mode) — never holds raw, just these two counters.
+    seen, hero_builds = Counter(), Counter()
+    first_idx = defaultdict(list)
+    for (raw,) in conn.execute("SELECT raw FROM matches"):
+        m = json.loads(raw)
+        if m.get("gameMode") in EXCLUDE_MODES:
+            continue
+        for p in m["players"]:
+            skills = build_skills(p)
+            if not skills:
+                continue
+            hero = p["heroId"]
+            hero_builds[hero] += 1
+            for a in set(skills):
+                seen[(hero, a)] += 1
+            first = {}
+            for i, a in enumerate(skills):
+                first.setdefault(a, i)
+            for a, i in first.items():
+                first_idx[(hero, a)].append(i)
+
+    pool = defaultdict(set)
+    for (hero, a), cnt in seen.items():
+        if cnt >= max(3, 0.01 * hero_builds[hero]):
+            pool[hero].add(a)
+
+    ults_raw = {}
+    for (hero, a), idxs in first_idx.items():
+        if len(idxs) < 0.3 * hero_builds[hero]:
+            continue
+        med = sorted(idxs)[len(idxs) // 2]
+        if med > ults_raw.get(hero, (None, -1))[1]:
+            ults_raw[hero] = (a, med)
+    ults = {h: a for h, (a, med) in ults_raw.items() if med >= 4}
+
+    # Pass 2: (hero, mode, idx, ability) corpus stats, pool-filtered builds only
+    count, tot = Counter(), Counter()
+    for (raw,) in conn.execute("SELECT raw FROM matches"):
+        m = json.loads(raw)
+        if m.get("gameMode") in EXCLUDE_MODES:
+            continue
+        mode = m.get("gameMode")
+        for p in m["players"]:
+            hero = p["heroId"]
+            filtered = [a for a in build_skills(p) if a in pool.get(hero, ())]
+            if len(filtered) < 6:
+                continue
+            for i, a in enumerate(filtered):
+                count[(hero, mode, i, a)] += 1
+                tot[(hero, mode, i)] += 1
+
+    def surprise(hero, mode, idx, a, pool_size):
+        p = (count[(hero, mode, idx, a)] - 1 + 0.5) / (tot[(hero, mode, idx)] - 1 + 0.5 * pool_size)
+        return -math.log(max(p, 1e-9))
+
+    # Pass 3: per-player scores. Buffers (per-match receipts + a flat float
+    # list for the p99) are small and bounded — the corpus is never held,
+    # only the count/tot/pool/ults dicts above plus these running buffers.
+    all_scores = []
+    updates = []
+    pending = []  # (mid, [(score, hero_id, picks, tag), ...])
+    n = 0
+    for mid, raw in conn.execute("SELECT match_id, raw FROM matches"):
+        m = json.loads(raw)
+        n += 1
+        if m.get("gameMode") in EXCLUDE_MODES:
+            updates.append((0.0, None, mid))
+            continue
+        mode = m.get("gameMode")
+        players = []
+        for p in m["players"]:
+            hero = p["heroId"]
+            ult = ults.get(hero)
+            pool_size = len(pool.get(hero, ()))
+            filtered = [a for a in build_skills(p) if a in pool.get(hero, ())]
+            cands = []
+            for i, a in enumerate(filtered):
+                s = surprise(hero, mode, i, a, pool_size)
+                if ult is not None and a == ult and filtered.index(a) <= 5:
+                    s *= 0.5  # banked-points discount on an early-picked ult
+                cands.append((s, i, a))
+            best = {}  # ability -> (surprise, index), keep best per ability
+            for s, i, a in cands:
+                if s > best.get(a, (-1, 0))[0]:
+                    best[a] = (s, i)
+            top = sorted(((s, i, a) for a, (s, i) in best.items()), reverse=True)[:3]
+            score = sum(s for s, _i, _a in top)
+            picks = [[ability_names.get(str(a), a), i + 1, round(s, 1)] for s, i, a in top]
+            tag = label(filtered, ult)
+            players.append((score, hero, picks, tag))
+            all_scores.append(score)
+        pending.append((mid, players))
+
+    all_scores.sort()
+    NOTE_BAR = all_scores[int(len(all_scores) * 0.99)] if all_scores else 0.0
+
+    for mid, players in pending:
+        players.sort(reverse=True, key=lambda t: t[0])
+        over = [pl for pl in players if pl[0] >= NOTE_BAR]
+        w = sum(pl[0] for pl in over) if over else (players[0][0] if players else 0.0)
+        notes = [
+            {"hero_id": h, "score": round(s, 1), "picks": picks, "tag": tag}
+            for k, (s, h, picks, tag) in enumerate(players)
+            if k == 0 or s >= NOTE_BAR
+        ][:3]
+        updates.append((round(w, 2), json.dumps(notes), mid))
+
+    conn.executemany(
+        "UPDATE matches SET skill_weirdness=?, skill_notes=? WHERE match_id=?", updates
+    )
+    conn.commit()
+    return n
+
+
 # --- RECOMPUTE (derived columns from stored raw, no network) ---
 
 def recompute(conn):
@@ -644,11 +793,92 @@ def selfcheck():
         return 1
 
 
+def skillcheck():
+    """Offline, no network, no env vars. Synthetic corpus for score_skill_weirdness."""
+    try:
+        # Anti-Mage (hero_id 1) real ability ids from ability_ids.json so the
+        # receipt name lookup resolves to actual strings, not int fallbacks.
+        A, B, C, ULT = 5003, 5004, 5005, 5006  # mana_break, blink, spell_shield, mana_void
+        NORMAL_ORDER = [A, B, A, C, B, A, B, C, ULT, C]  # ult banked late (typical)
+        WEIRD_ORDER = [ULT, ULT, ULT, A, B, C, A, B, C, A]  # ult spammed pt1-3
+
+        def synth(mid, order, mode="ALL_PICK_RANKED", second=None):
+            abilities = [{"abilityId": a, "time": (i + 1) * 60, "level": i + 1, "isTalent": False}
+                        for i, a in enumerate(order)]
+            p0 = {
+                "heroId": 1, "isRadiant": True, "leaverStatus": "NONE",
+                "kills": 5, "deaths": 3, "assists": 8, "networth": 15000,
+                "goldPerMinute": 400, "lane": 1, "role": 1, "position": "1",
+                "heroDamage": 10000, "partyId": None, "intentionalFeeding": False,
+                "dotaPlus": None, "abilities": abilities,
+                "steamAccount": {"seasonRank": 15, "smurfFlag": 0},
+                "stats": {"networthPerMinute": [], "itemPurchases": [], "actionsPerMinute": []},
+            }
+            p1 = second or {
+                "heroId": 99, "isRadiant": False, "leaverStatus": "NONE",
+                "kills": 2, "deaths": 4, "assists": 3, "networth": 8000,
+                "goldPerMinute": 250, "abilities": [], "dotaPlus": None, "stats": {},
+            }
+            return {
+                "id": mid, "durationSeconds": 3300, "startDateTime": 1700000000 + mid,
+                "didRadiantWin": True, "gameMode": mode, "rank": 12, "bracket": 1,
+                "radiantKills": [1, 1], "direKills": [1, 0],
+                "radiantNetworthLeads": [0, 500, 1000],
+                "towerDeaths": [], "players": [p0, p1],
+            }
+
+        gm_second = {
+            "heroId": 99, "isRadiant": False, "leaverStatus": "NONE",
+            "kills": 2, "deaths": 4, "assists": 3, "networth": 8000,
+            "goldPerMinute": 250, "abilities": [], "dotaPlus": {"level": 30}, "stats": {},
+        }
+
+        matches = [synth(9001, NORMAL_ORDER, second=gm_second)]
+        matches += [synth(9002 + i, NORMAL_ORDER) for i in range(3)]  # 9002, 9003, 9004
+        matches.append(synth(9010, WEIRD_ORDER))
+        matches.append(synth(9020, NORMAL_ORDER, mode="SINGLE_DRAFT"))
+
+        conn = get_conn(":memory:")
+        for m in matches:
+            upsert_match(conn, m, 12)
+
+        score_skill_weirdness(conn)
+
+        rows = {r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT match_id, skill_weirdness, skill_notes FROM matches").fetchall()}
+
+        assert all(v[0] is not None for v in rows.values()), f"NULL skill_weirdness: {rows}"
+        assert rows[9020][0] == 0.0, f"SINGLE_DRAFT should score 0, got {rows[9020][0]}"
+        assert not rows[9020][1], f"SINGLE_DRAFT skill_notes should be NULL/empty, got {rows[9020][1]}"
+        assert rows[9010][0] > rows[9001][0], (
+            f"weird ({rows[9010][0]}) should score > normal ({rows[9001][0]})"
+        )
+
+        notes = json.loads(rows[9010][1])
+        assert notes, "weird match has no skill_notes"
+        assert {"hero_id", "score", "picks", "tag"}.issubset(notes[0]), f"note key mismatch: {notes[0]}"
+        assert isinstance(notes[0]["picks"][0][0], str), (
+            f"picks[0][0] should be an ability name string, got {notes[0]['picks'][0][0]!r}"
+        )
+
+        players = [p for m in load_matches(conn) for p in m["players"]]
+        assert all("dplus" in p for p in players), "dplus missing from a player"
+        assert any(p["dplus"] == 30 for p in players), "no level-30 dplus player found"
+
+        print("skillcheck OK")
+        return 0
+    except AssertionError as e:
+        print(f"skillcheck FAILED: {e}")
+        return 1
+
+
 # --- CLI ---
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--selfcheck", action="store_true")
+    parser.add_argument("--skillcheck", action="store_true",
+                        help="offline self-test for score_skill_weirdness, then exit")
     parser.add_argument("--loop", nargs="?", const=180, type=int, default=None)
     parser.add_argument("--backfill", nargs="?", const=RETENTION_DAYS, type=int, default=None,
                         metavar="DAYS", help="one exhaustive discovery pass DAYS back, then exit")
@@ -660,6 +890,8 @@ def main():
 
     if args.selfcheck:
         sys.exit(selfcheck())
+    if args.skillcheck:
+        sys.exit(skillcheck())
 
     conn = get_conn()
     if args.recompute:
@@ -667,6 +899,7 @@ def main():
         return
     if args.weirdness:
         log.info(f"weirdness: {score_weirdness(conn)} matches scored")
+        log.info(f"skill weirdness: {score_skill_weirdness(conn)} matches scored")
         return
     if args.backfill is not None:
         n = discover(conn, args.backfill)
@@ -682,6 +915,7 @@ def main():
                 # New matches sort as weirdness 0 until the next rescore.
                 if n and n % 50 == 0:
                     log.info(f"weirdness: {score_weirdness(conn)} matches scored")
+                    log.info(f"skill weirdness: {score_skill_weirdness(conn)} matches scored")
             except Exception as e:
                 log.error(f"cycle failed: {e}")
             n += 1
