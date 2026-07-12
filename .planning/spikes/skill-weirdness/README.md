@@ -49,6 +49,24 @@ score = sum of top-3 surprisals (mirrors item build-weirdness).
 - **Zero overlap** between top-20 skill-weird and top-20 item-weird matches —
   the signals are complementary; keep skill-weirdness as its own component.
 
+## Post-validation iterations
+
+- **Rebalance (user: banked ults dominated):** distinct-ability top-3 (mirrors
+  item distinct-family rule) + 0.5x discount on early-picked ults. Banked-ult
+  entries fell from ~60% to ~15% of the top-20; wrong-max and late-ult
+  archetypes surfaced. Params live in `pmi2.score(distinct=, ults=, ult_discount=)`.
+- **002c Markov (user: "is it temporally aware?"): REJECTED.** State-conditional
+  whole-build scorer (markov.py) rewards "consistently slightly off" over one
+  spectacular story — receipts go mushy, and sparse states back off to
+  positional anyway. Also exposed: **SINGLE_DRAFT (n=151) is too sparse to
+  normalize** — exclude that mode in the production scorer.
+- **Per-player grandmaster signal: VIABLE, free.** `dotaPlus.level` (hero
+  mastery badge, 1-30) is in every raw; `max_dplus` column already rolls it up.
+  368 matches (2.3%) have a Master+ (>=26) badge player; 208 have level-30.
+  Sample gold: badge-30 Kunkka going 0/10/0 at 267 gpm in ranked Herald
+  (m8888225382). Caveat: `dotaPlusHeroXp` is capped/sentinel (max 72,050
+  repeated) — useless for mastery; use `dotaPlus.level` only.
+
 ## Surprises / Trail
 
 - `isTalent` also flags facet/innate special-bonuses (up to 12/player) —

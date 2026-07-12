@@ -39,7 +39,10 @@ def load():
     return builds
 
 
-def score(builds):
+def score(builds, distinct=False, ults=None, ult_discount=1.0):
+    """distinct: top-3 over distinct abilities (mirrors item distinct-family).
+    ult_discount: multiplier on the hero's ult when first-picked early (<=5) —
+    the banked-points signature; keeps it visible without board domination."""
     # hero ability pools from full corpus (mode-agnostic; kits don't vary by mode)
     seen = Counter()
     hero_builds = Counter()
@@ -73,8 +76,20 @@ def score(builds):
 
     out = []
     for mid, slot, h, m, sk in filtered:
-        per = sorted(((surprise(h, m, i, a), i, a) for i, a in enumerate(sk)),
-                     reverse=True)[:TOP_K]
+        ult = (ults or {}).get(h)
+        cands = []
+        for i, a in enumerate(sk):
+            s = surprise(h, m, i, a)
+            if a == ult and sk.index(a) <= 5:
+                s *= ult_discount
+            cands.append((s, i, a))
+        if distinct:
+            best = {}
+            for s, i, a in cands:
+                if s > best.get(a, (0, 0))[0]:
+                    best[a] = (s, i)
+            cands = [(s, i, a) for a, (s, i) in best.items()]
+        per = sorted(cands, reverse=True)[:TOP_K]
         out.append((sum(s for s, _, _ in per), mid, slot, h, m,
                     [(round(s, 1), i + 1, a) for s, i, a in per], sk))
     out.sort(reverse=True)

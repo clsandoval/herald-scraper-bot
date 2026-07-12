@@ -32,7 +32,8 @@ def label(sk, ult):
 def run():
     builds = pmi2.load()
     ults = derive_ults(builds)
-    ranked = pmi2.score(builds)
+    # rebalanced: distinct-ability top-3 + 0.5x early-ult (banking) discount
+    ranked = pmi2.score(builds, distinct=True, ults=ults, ult_discount=0.5)
 
     scores = sorted(s for s, *_ in ranked)
     n = len(scores)
