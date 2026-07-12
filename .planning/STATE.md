@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
 Plan: 3 of 3 (plan 01-01 complete)
 Status: Ready to execute
-Last activity: 2026-07-11 - Completed quick task 260711-wqo: Board usage telemetry + /heralds hint
+Last activity: 2026-07-12 - Completed quick task 260712-6p2: Skill weirdness + GM badges + ranked/50min pivot
 
 Progress: [███████░░░] 67%
 
@@ -83,6 +83,7 @@ Recent decisions affecting current work:
 |---|-------------|------|--------|-----------|
 | 260710-by5 | Herald match ingest script: OpenDota discovery → Stratz enrichment → local SQLite, 10-day retention | 2026-07-10 | e5385af | [260710-by5-herald-match-ingest-script-opendota-disc](./quick/260710-by5-herald-match-ingest-script-opendota-disc/) |
 | 260711-wqo | Board usage telemetry (ts + Discord user per interaction / /heralds use) into `usage` table + /heralds hint on public board | 2026-07-11 | fcacedf | [260711-wqo-add-usage-telemetry-timestamp-discord-us](./quick/260711-wqo-add-usage-telemetry-timestamp-discord-us/) |
+| 260712-6p2 | Skill-order weirdness column + GM badge surfacing + ranked-only/≥50min/14-day ingest pivot | 2026-07-12 | 8cd58f9 | [260712-6p2-skill-weirdness-column-grandmaster-badge](./quick/260712-6p2-skill-weirdness-column-grandmaster-badge/) |
 
 ## Deferred Items
 
