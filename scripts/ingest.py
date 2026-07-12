@@ -62,19 +62,35 @@ STRATZ_FIELDS = """
     radiantKills direKills radiantNetworthLeads radiantExperienceLeads
     topLaneOutcome midLaneOutcome bottomLaneOutcome firstBloodTime numHumanPlayers
     towerDeaths { time isRadiant }
+    barracksStatusRadiant barracksStatusDire
+    pickBans { isPick heroId order isRadiant }
     players {
       heroId isRadiant leaverStatus kills deaths assists networth goldPerMinute
       experiencePerMinute numLastHits numDenies lane role position
       heroDamage towerDamage heroHealing level partyId intentionalFeeding
-      dotaPlusHeroXp
+      dotaPlusHeroXp isRandom goldSpent
       dotaPlus { level }
       abilities { abilityId time level isTalent }
       steamAccount { seasonRank smurfFlag dotaAccountLevel }
       item0Id item1Id item2Id item3Id item4Id item5Id
       backpack0Id backpack1Id backpack2Id neutral0Id
-      stats { networthPerMinute itemPurchases { time itemId } actionsPerMinute }
+      stats {
+        networthPerMinute itemPurchases { time itemId } actionsPerMinute
+        allTalks { time message }
+        chatWheels { time chatWheelId }
+        deathEvents { time timeDead goldFed goldLost isDieBack isAttemptTpOut
+                      hasHealAvailable }
+        itemUsed { itemId count }
+        wards { time type }
+        campStack tripsFountainPerMinute level
+        courierKills { time }
+        matchPlayerBuffEvent { time itemId abilityId stackCount }
+      }
     }
 """
+# 13 KEEP fields from spike stratz-signals (2026-07-12): raw observables only.
+# Skipped as broken/opinion/heavy: invisibleSeconds, behavior, heroAverage,
+# runes, match chatEvents, locationReport, inventoryReport.
 # raw observables only — Stratz's opinion fields (imp/award/analysisOutcome/
 # predicted*) stay out: watchability scoring is our own IP
 
