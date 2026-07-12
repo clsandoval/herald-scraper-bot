@@ -110,7 +110,8 @@ def init_db(conn):
           throw_gold INTEGER, feeder_deaths INTEGER, top_kills INTEGER, max_gpm INTEGER,
           winner_towers_lost INTEGER, has_rapier INTEGER, raw TEXT, enriched_at INTEGER,
           lead_flips INTEGER, hero_damage INTEGER, has_smurf INTEGER, has_feeder INTEGER,
-          max_party INTEGER, max_apm INTEGER, max_dplus INTEGER, weirdness REAL)
+          max_party INTEGER, max_apm INTEGER, max_dplus INTEGER, weirdness REAL,
+          megas_comeback INTEGER, chat_lines INTEGER)
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_matches_start ON matches(start_time)")
@@ -132,6 +133,7 @@ def init_db(conn):
                        ("matches", "weird_notes TEXT"),
                        ("matches", "skill_weirdness REAL"), ("matches", "skill_notes TEXT"),
                        ("matches", "mastery_sum INTEGER"),  # mastery_avg is a dead column in older DBs
+                       ("matches", "megas_comeback INTEGER"), ("matches", "chat_lines INTEGER"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -247,6 +249,11 @@ def derived_cols(raw):
     # (avg tried first, demoted: a single 30 outranked double-GM games)
     mastery_sum = sum((p.get("dotaPlus") or {}).get("level") or 0 for p in rp
                       if ((p.get("dotaPlus") or {}).get("level") or 0) >= 25)
+    # winner's own barracks bitmask == 0 -> won while your own base was megged
+    # (spike signal-mining: 6.7% of corpus). None/missing (old fixture) -> 0.
+    winner_racks = raw.get("barracksStatusRadiant") if v["radiant_win"] else raw.get("barracksStatusDire")
+    megas_comeback = 1 if winner_racks == 0 else 0
+    chat_lines = sum(len((p.get("stats") or {}).get("allTalks") or []) for p in rp)
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
@@ -256,6 +263,7 @@ def derived_cols(raw):
         "lead_flips": lead_flips, "hero_damage": hero_damage,
         "has_smurf": has_smurf, "has_feeder": has_feeder, "max_party": max_party,
         "max_apm": max_apm, "max_dplus": max_dplus, "mastery_sum": mastery_sum,
+        "megas_comeback": megas_comeback, "chat_lines": chat_lines,
     }
 
 
@@ -271,8 +279,9 @@ def upsert_match(conn, raw, avg_rank_tier):
           avg_rank_tier, kills_r, kills_d, kills, kpm, max_lead, min_lead, final_lead,
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
           winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage,
-          has_smurf, has_feeder, max_party, max_apm, max_dplus, mastery_sum
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          has_smurf, has_feeder, max_party, max_apm, max_dplus, mastery_sum,
+          megas_comeback, chat_lines
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -283,7 +292,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             c["top_kills"], c["max_gpm"], c["winner_towers_lost"], c["has_rapier"],
             json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
             c["has_smurf"], c["has_feeder"], c["max_party"], c["max_apm"], c["max_dplus"],
-            c["mastery_sum"],
+            c["mastery_sum"], c["megas_comeback"], c["chat_lines"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
@@ -900,6 +909,62 @@ def skillcheck():
         return 1
 
 
+def signalcheck():
+    """Offline, no network, no env vars. Synthetic corpus for megas_comeback/chat_lines."""
+    try:
+        def mk_player(hero_id, is_radiant, allTalks_n):
+            return {
+                "heroId": hero_id, "isRadiant": is_radiant, "kills": 1, "deaths": 1,
+                "assists": 1, "goldPerMinute": 300, "networth": 5000, "lane": 1,
+                "role": 1, "position": "1", "heroDamage": 1000, "partyId": None,
+                "intentionalFeeding": False, "dotaPlus": None, "isRandom": False,
+                "steamAccount": {"seasonRank": 12, "smurfFlag": 0},
+                "stats": {
+                    "allTalks": [{"time": i * 10, "message": "gg"} for i in range(allTalks_n)],
+                    "itemPurchases": [], "actionsPerMinute": [], "networthPerMinute": [],
+                },
+            }
+
+        def mk_match(mid, radiant_win, racks_r, racks_d, chat_counts):
+            players = [mk_player(i + 1, i < 5, chat_counts[i]) for i in range(10)]
+            return {
+                "id": mid, "durationSeconds": 3000, "startDateTime": 1700000000 + mid,
+                "didRadiantWin": radiant_win, "gameMode": "ALL_PICK_RANKED", "rank": 12,
+                "bracket": 1, "radiantKills": [1, 1, 1, 1, 1], "direKills": [1, 1, 1, 1, 1],
+                "radiantNetworthLeads": [0, 100, -100], "towerDeaths": [],
+                "barracksStatusRadiant": racks_r, "barracksStatusDire": racks_d,
+                "players": players,
+            }
+
+        # radiant win, radiant racks razed -> won while megged
+        m1 = mk_match(9101, True, 0, 63, (3, 2, 1, 0, 0, 0, 0, 0, 0, 0))       # chat sum = 6
+        # radiant win, radiant racks intact -> not megged
+        m2 = mk_match(9102, True, 63, 0, (1, 1, 1, 1, 1, 1, 1, 1, 1, 1))       # chat sum = 10
+        # dire win, dire racks razed -> won while megged
+        m3 = mk_match(9103, False, 63, 0, (0, 0, 0, 0, 0, 5, 0, 0, 0, 0))      # chat sum = 5
+
+        conn = get_conn(":memory:")
+        for m in (m1, m2, m3):
+            upsert_match(conn, m, 12)
+
+        rows = {r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT match_id, megas_comeback, chat_lines FROM matches").fetchall()}
+        assert rows[9101] == (1, 6), f"m1 mismatch: {rows[9101]}"
+        assert rows[9102] == (0, 10), f"m2 mismatch: {rows[9102]}"
+        assert rows[9103] == (1, 5), f"m3 mismatch: {rows[9103]}"
+
+        recompute(conn)
+        rows2 = {r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT match_id, megas_comeback, chat_lines FROM matches").fetchall()}
+        assert rows2 == rows, f"recompute changed values: {rows} -> {rows2}"
+
+        print("signalcheck OK")
+        return 0
+    except AssertionError as e:
+        print(f"signalcheck FAILED: {e}")
+        return 1
+
+
 # --- CLI ---
 
 def main():
@@ -907,6 +972,8 @@ def main():
     parser.add_argument("--selfcheck", action="store_true")
     parser.add_argument("--skillcheck", action="store_true",
                         help="offline self-test for score_skill_weirdness, then exit")
+    parser.add_argument("--signalcheck", action="store_true",
+                        help="offline self-test for megas_comeback/chat_lines, then exit")
     parser.add_argument("--loop", nargs="?", const=180, type=int, default=None)
     parser.add_argument("--backfill", nargs="?", const=RETENTION_DAYS, type=int, default=None,
                         metavar="DAYS", help="one exhaustive discovery pass DAYS back, then exit")
@@ -920,6 +987,8 @@ def main():
         sys.exit(selfcheck())
     if args.skillcheck:
         sys.exit(skillcheck())
+    if args.signalcheck:
+        sys.exit(signalcheck())
 
     conn = get_conn()
     if args.recompute:
