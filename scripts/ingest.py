@@ -115,6 +115,7 @@ def init_db(conn):
                        ("matches", "max_dplus INTEGER"), ("matches", "weirdness REAL"),
                        ("matches", "weird_notes TEXT"),
                        ("matches", "skill_weirdness REAL"), ("matches", "skill_notes TEXT"),
+                       ("matches", "mastery_avg REAL"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -226,6 +227,11 @@ def derived_cols(raw):
 
     max_apm = int(max((_apm(p) for p in rp), default=0))
     max_dplus = max(((p.get("dotaPlus") or {}).get("level") or 0 for p in rp), default=0)
+    # avg badge among Master+ (>=25) players only — sort surfaces "whole lobby
+    # of grandmasters", not one lucky badge
+    masters = [(p.get("dotaPlus") or {}).get("level") or 0 for p in rp
+               if ((p.get("dotaPlus") or {}).get("level") or 0) >= 25]
+    mastery_avg = round(sum(masters) / len(masters), 1) if masters else 0
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
@@ -234,7 +240,7 @@ def derived_cols(raw):
         "winner_towers_lost": winner_towers_lost, "has_rapier": has_rapier,
         "lead_flips": lead_flips, "hero_damage": hero_damage,
         "has_smurf": has_smurf, "has_feeder": has_feeder, "max_party": max_party,
-        "max_apm": max_apm, "max_dplus": max_dplus,
+        "max_apm": max_apm, "max_dplus": max_dplus, "mastery_avg": mastery_avg,
     }
 
 
@@ -250,8 +256,8 @@ def upsert_match(conn, raw, avg_rank_tier):
           avg_rank_tier, kills_r, kills_d, kills, kpm, max_lead, min_lead, final_lead,
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
           winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage,
-          has_smurf, has_feeder, max_party, max_apm, max_dplus
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          has_smurf, has_feeder, max_party, max_apm, max_dplus, mastery_avg
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -262,6 +268,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             c["top_kills"], c["max_gpm"], c["winner_towers_lost"], c["has_rapier"],
             json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
             c["has_smurf"], c["has_feeder"], c["max_party"], c["max_apm"], c["max_dplus"],
+            c["mastery_avg"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))

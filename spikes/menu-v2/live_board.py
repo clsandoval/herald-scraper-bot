@@ -144,9 +144,9 @@ SORTS = {  # key -> (label, ORDER BY expr)
     "rapiers": ("Divine Rapiers held at game end",
                 "coalesce((SELECT n FROM rapiers r WHERE r.match_id = matches.match_id), 0)"),
     "rank": ("Average rank", "avg_rank_tier"),
-    "weird": ("Build weirdness", "coalesce(weirdness, 0)"),
+    "weird": ("Item build weirdness", "coalesce(weirdness, 0)"),
     "skillweird": ("Skill-order weirdness", "coalesce(skill_weirdness, 0)"),
-    "mastery": ("Dota Plus mastery (highest badge)", "coalesce(max_dplus, 0)"),
+    "mastery": ("Dota Plus mastery (avg Master+ badge)", "coalesce(mastery_avg, 0)"),
 }
 # picking a new primary sort resets direction to its natural default
 PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
@@ -171,7 +171,7 @@ _W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY we
           " LIMIT 1 OFFSET (SELECT count(*) * 95 / 100 FROM matches WHERE weirdness IS NOT NULL)")
         or [[None]])[0][0]
 if _W95:
-    FILTERS["weirdf"] = ("Off-meta build in game", f"matches.weirdness >= {_W95:.2f}")
+    FILTERS["weirdf"] = ("Off-meta item build in game", f"matches.weirdness >= {_W95:.2f}")
 
 # threshold families: picking two of a kind just ANDs to the stricter one
 for _t in (70, 80):
@@ -420,7 +420,7 @@ class Board(discord.ui.LayoutView):
                 buys = ", ".join(f"{f} @{t}m" for f, t, _s in note["items"])
                 lines.append(f"{render.hero_emoji(note['hero_id']) or render.hero_name(note['hero_id'])} {buys}")
             if lines:
-                c.add_item(discord.ui.TextDisplay("🌀 **Off-meta builds**\n" + "\n".join(lines)))
+                c.add_item(discord.ui.TextDisplay("🌀 **Off-meta item builds**\n" + "\n".join(lines)))
         # skill-order weirdness receipts — why this match scores weird on ability picks
         srow = q("SELECT skill_weirdness, skill_notes FROM matches WHERE match_id=?", (m["id"],))
         if srow and (srow[0][0] or 0) >= 8 and srow[0][1]:
