@@ -9,6 +9,7 @@ parsed only for the rows actually displayed.
 Run:  DISCORD_BOT_TOKEN=... .venv/bin/python live_board.py
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -572,6 +573,26 @@ async def on_ready():
     msg = await ch.send(view=v, files=files)
     STATE[msg.id] = st
     log.info(f"LIVE board posted: https://discord.com/channels/{msg.guild.id}/{ch.id}/{msg.id}")
+    client.loop.create_task(refresh_board(msg))
+
+
+async def refresh_board(msg, every=900):
+    """The 'live' board previously only re-rendered on clicks and could sit
+    days stale — re-render it from the DB on a timer. User clicks between
+    ticks are safe: we rebuild from the same STATE entry they mutate."""
+    while True:
+        await asyncio.sleep(every)
+        try:
+            st = STATE.get(msg.id)
+            if st is None:
+                return  # board replaced
+            nv = Board(st)
+            files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
+            await msg.edit(view=nv, attachments=files)
+        except discord.NotFound:
+            return  # board deleted; a restart will post a fresh one
+        except Exception as e:
+            log.warning(f"board refresh failed: {e}")
 
 
 if __name__ == "__main__":

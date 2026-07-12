@@ -746,7 +746,13 @@ def recompute(conn):
 # --- CYCLE ---
 
 def cycle(conn):
-    n_disc = discover(conn)
+    try:
+        n_disc = discover(conn)
+    except Exception as e:
+        # OpenDota Explorer 400s intermittently under load; a failed discover
+        # must not cost the whole cycle — enrich/prune still run on the queue
+        log.warning(f"discover failed, continuing cycle without it: {e}")
+        n_disc = 0
     n_enr, n_fail, n_drop, n_cut = enrich(conn)
     n_prune = prune(conn)
     mtot = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
@@ -932,10 +938,14 @@ def main():
         while True:
             try:
                 cycle(conn)
-                # ponytail: full corpus rescore every ~50 cycles (~daily at 30min
-                # loops), NOT at boot — boot rescore raced board startup into OOM.
-                # New matches sort as weirdness 0 until the next rescore.
-                if n and n % 50 == 0:
+                # Self-healing rescore: re-enrich sweeps and backfill waves
+                # null both weirdness columns via INSERT OR REPLACE — rescore
+                # whenever the unscored pile grows past a cycle's worth, plus
+                # the ~daily floor. NOT at boot (raced board startup into OOM).
+                unscored = conn.execute(
+                    "SELECT count(*) FROM matches WHERE weirdness IS NULL"
+                ).fetchone()[0]
+                if (n and n % 50 == 0) or unscored > 500:
                     log.info(f"weirdness: {score_weirdness(conn)} matches scored")
                     log.info(f"skill weirdness: {score_skill_weirdness(conn)} matches scored")
             except Exception as e:
