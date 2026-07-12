@@ -148,6 +148,7 @@ SORTS = {  # key -> (label, ORDER BY expr)
     "weird": ("Item build weirdness", "coalesce(weirdness, 0)"),
     "skillweird": ("Skill-order weirdness", "coalesce(skill_weirdness, 0)"),
     "mastery": ("Dota Plus mastery (total Master+ badges)", "coalesce(mastery_sum, 0)"),
+    "talkative": ("Most talkative (all-chat lines)", "coalesce(chat_lines, 0)"),
 }
 # picking a new primary sort resets direction to its natural default
 PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
@@ -166,6 +167,7 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
     "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
     "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
     "mastery": ("Has a Dota Plus Master+ badge (25+)", "matches.max_dplus >= 25"),
+    "megas": ("Comeback from mega creeps", "matches.megas_comeback = 1"),
 }
 # off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
 _W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
@@ -445,6 +447,26 @@ class Board(discord.ui.LayoutView):
                 for p in gm_players
             ]
             c.add_item(discord.ui.TextDisplay("🏆 **Dota Plus mastery**\n" + "\n".join(lines)))
+        # Per-player feeding/shame receipts + megas match tag (spike signal-mining).
+        # Receipts are winner-neutral and render regardless of spoiler; the
+        # megas tag is outcome-revealing and is suppressed under spoiler mode.
+        raw_row = q("SELECT raw FROM matches WHERE match_id=?", (m["id"],))
+        if raw_row:
+            raw = json.loads(raw_row[0][0])
+            lines = []
+            for rawp, mp in zip(raw["players"], m["players"]):
+                receipts = render.player_receipts(rawp, m["duration"])
+                if receipts:
+                    lines.append(
+                        f"{render.hero_emoji(mp['hero_id']) or render.hero_name(mp['hero_id'])}"
+                        f" {'; '.join(receipts)}"
+                    )
+            if lines:
+                c.add_item(discord.ui.TextDisplay("💀 **Feeding & shame**\n" + "\n".join(lines)))
+            if not sp:
+                tag = render.megas_tag(raw)
+                if tag:
+                    c.add_item(discord.ui.TextDisplay(tag))
         g = discord.ui.MediaGallery()
         g.add_item(media=f"attachment://g{m['id']}.png")
         c.add_item(g)
