@@ -16,6 +16,9 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 MAX_COMPONENTS = 40
 MAX_CHARS = 3600  # guard below Discord's 4000 total-text pool
 
+BKB_ID = 116
+MIDAS_ID = 65
+
 _heroes = json.load(open(f"{HERE}/assets/heroes.json"))
 _items = json.load(open(f"{HERE}/assets/items.json"))
 _item_by_id = {v["id"]: {"key": k, **v} for k, v in _items.items() if v.get("id")}
@@ -172,6 +175,55 @@ def factoid(m):
     if m["mins"] >= 45:
         return f"{m['mins']} minutes of trench warfare"
     return ""
+
+
+# ---------- receipts (spike signal-mining, LOCKED thresholds — do NOT retune) ----------
+
+def player_receipts(rawp, duration_s):
+    """Winner-NEUTRAL receipt strings for one raw Stratz player dict: feeding,
+    BKB/Midas item shame, randomed hero, died-mid-TP, buyback-then-died. These
+    strings NEVER reveal the winner — safe to render regardless of spoiler mode."""
+    stats = rawp.get("stats") or {}
+    out = []
+
+    time_dead = sum(e.get("timeDead") or 0 for e in stats.get("deathEvents") or [])
+    gold_fed = sum(e.get("goldFed") or 0 for e in stats.get("deathEvents") or [])
+    frac = time_dead / duration_s if duration_s else 0
+    if time_dead >= 1200 or frac >= 0.33:
+        out.append(f"{time_dead // 60} min ({round(frac * 100)}%) dead, fed {gold_fed // 1000}k gold")
+
+    used = {u["itemId"]: u.get("count", 0) for u in stats.get("itemUsed") or []}
+
+    def bought(item_id):
+        return any(b.get("itemId") == item_id and (b.get("time") or 0) > 0
+                   for b in stats.get("itemPurchases") or [])
+
+    if bought(BKB_ID) and used.get(BKB_ID, 0) == 0:
+        out.append("BKB bought, never used")
+    if bought(MIDAS_ID) and used.get(MIDAS_ID, 0) < 10:
+        out.append(f"Midas, {used.get(MIDAS_ID, 0)} uses")
+    if rawp.get("isRandom"):
+        out.append("randomed")
+
+    tp_deaths = sum(1 for e in stats.get("deathEvents") or [] if e.get("isAttemptTpOut"))
+    if tp_deaths >= 2:
+        out.append(f"died mid-TP x{tp_deaths}")
+    dieback_deaths = sum(1 for e in stats.get("deathEvents") or [] if e.get("isDieBack"))
+    if dieback_deaths >= 2:
+        out.append(f"buyback then died x{dieback_deaths}")
+
+    return out
+
+
+def megas_tag(raw):
+    """Outcome-revealing string when the winner's own barracks bitmask == 0
+    (won while your own base was megged, ~6.7% of the corpus). None otherwise.
+    Callers MUST hide this under spoiler mode — player_receipts() above is
+    winner-neutral and safe regardless, this is not."""
+    winner_racks = raw.get("barracksStatusRadiant") if raw.get("didRadiantWin") else raw.get("barracksStatusDire")
+    if winner_racks == 0:
+        return "🔥 Won from mega creeps — the winning team's barracks were all razed"
+    return None
 
 
 # ---------- budget guard ----------
