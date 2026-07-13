@@ -179,7 +179,6 @@ if _W95:
 # threshold families: picking two of a kind just ANDs to the stricter one
 for _t in (70, 80):
     FILTERS[f"war{_t}"] = (f"Longer than {_t} min", f"matches.duration_s >= {_t * 60}")
-FILTERS["speed20"] = ("Shorter than 20 min", "matches.duration_s < 1200")
 
 # option-label counts over the whole table, computed once at startup
 FILT_COUNTS = dict(zip(FILTERS, q(
