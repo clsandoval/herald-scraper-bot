@@ -224,6 +224,22 @@ def test_death_receipt_requires_30pct_of_game():
     assert not any("dead" in r for r in render.player_receipts(player(1200), 5400))
 
 
+def test_cycle_checkpoints_wal():
+    """Hardening: a re-enabled ingest must bound the WAL each cycle, or the board's
+    long-lived reader lets it grow unbounded -> slow reads + hung commits."""
+    import inspect
+    assert "wal_checkpoint" in inspect.getsource(ingest.cycle)
+
+
+def test_load_matches_respects_limit():
+    """Hardening: load_matches unbounded parses the entire corpus into RAM (OOM)."""
+    conn = ingest.get_conn(":memory:")
+    for mid in (9601, 9602, 9603):
+        ingest.upsert_match(conn, _match(mid=mid), avg_rank_tier=12)
+    assert len(ingest.load_matches(conn, limit=1)) == 1
+    assert len(ingest.load_matches(conn, limit=2)) == 2
+
+
 def test_board_sorts_read_columns_not_raw_json():
     """Bug: the board rebuilt sort tables from raw JSON (json_each over the whole
     corpus) at every boot — a multi-minute 1.5GB scan. Sorts must read columns."""

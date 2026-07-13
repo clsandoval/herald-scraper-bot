@@ -357,12 +357,16 @@ def upsert_match(conn, raw, avg_rank_tier):
 
 # --- READER ---
 
-def load_matches(conn, where="", params=()):
-    """The board imports THIS. Returns match_view dicts, newest first."""
+def load_matches(conn, where="", params=(), limit=None):
+    """Returns match_view dicts, newest first. HARDENING: takes an optional limit
+    — an unbounded call fetches+parses the ENTIRE raw corpus into RAM (~1GB) and
+    was a latent OOM. The live board never calls this on the full corpus (it uses
+    page-scoped hydrate); callers that need many rows must pass a limit."""
     sql = "SELECT raw FROM matches" + (f" WHERE {where}" if where else "")
     sql += " ORDER BY start_time DESC"
-    rows = conn.execute(sql, params).fetchall()
-    return [match_view(json.loads(r[0])) for r in rows]
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    return [match_view(json.loads(raw)) for (raw,) in conn.execute(sql, params)]
 
 
 # --- OD EXPLORER (discovery) ---
@@ -818,6 +822,14 @@ def cycle(conn):
         n_disc = 0
     n_enr, n_fail, n_drop, n_cut = enrich(conn)
     n_prune = prune(conn)
+    # HARDENING: bound the WAL every cycle. The board holds a long-lived read
+    # connection; without a checkpoint the -wal file grows unbounded, which slows
+    # every read and makes commits hang (this bricked the board once). TRUNCATE
+    # reclaims what the reader isn't pinning; never let it fail the cycle.
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        log.warning(f"wal checkpoint failed: {e}")
     mtot = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
     ptot = conn.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
     log.info(
