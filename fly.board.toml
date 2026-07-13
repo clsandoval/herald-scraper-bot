@@ -18,5 +18,5 @@ kill_timeout   = "30s"
   destination = "/data"
 
 [[vm]]
-  size   = "shared-cpu-1x"
-  memory = "1gb"
+  size   = "shared-cpu-2x"  # board boot scans the full DB; 1 core starved it against ingest
+  memory = "2gb"  # 1gb OOM-killed ingest+board sharing one VM; headroom for boot + pending backlog

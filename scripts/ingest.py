@@ -134,6 +134,7 @@ def init_db(conn):
                        ("matches", "skill_weirdness REAL"), ("matches", "skill_notes TEXT"),
                        ("matches", "mastery_sum INTEGER"),  # mastery_avg is a dead column in older DBs
                        ("matches", "megas_comeback INTEGER"), ("matches", "chat_lines INTEGER"),
+                       ("matches", "avg_gap REAL"), ("matches", "rapier_count INTEGER"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -254,6 +255,10 @@ def derived_cols(raw):
     winner_racks = raw.get("barracksStatusRadiant") if v["radiant_win"] else raw.get("barracksStatusDire")
     megas_comeback = 1 if winner_racks == 0 else 0
     chat_lines = sum(len((p.get("stats") or {}).get("allTalks") or []) for p in rp)
+    # board sort columns (were rebuilt from raw JSON at every board boot — a
+    # multi-minute 1.5GB scan; precomputed here so the board just reads columns)
+    avg_gap = sum(abs(x) for x in leads) / max(len(leads), 1)  # mean |networth lead| = closeness
+    rapier_count = sum(1 for p in v["players"] for i in p["items"] if i == RAPIER_ID)
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
@@ -264,6 +269,7 @@ def derived_cols(raw):
         "has_smurf": has_smurf, "has_feeder": has_feeder, "max_party": max_party,
         "max_apm": max_apm, "max_dplus": max_dplus, "mastery_sum": mastery_sum,
         "megas_comeback": megas_comeback, "chat_lines": chat_lines,
+        "avg_gap": avg_gap, "rapier_count": rapier_count,
     }
 
 
@@ -280,8 +286,8 @@ def upsert_match(conn, raw, avg_rank_tier):
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
           winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage,
           has_smurf, has_feeder, max_party, max_apm, max_dplus, mastery_sum,
-          megas_comeback, chat_lines
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          megas_comeback, chat_lines, avg_gap, rapier_count
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -293,6 +299,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
             c["has_smurf"], c["has_feeder"], c["max_party"], c["max_apm"], c["max_dplus"],
             c["mastery_sum"], c["megas_comeback"], c["chat_lines"],
+            c["avg_gap"], c["rapier_count"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
@@ -515,10 +522,16 @@ def enrich(conn):
 def prune(conn):
     now = int(time.time())
     cutoff = now - RETENTION_DAYS * 86400
-    q = conn.execute("SELECT match_id FROM matches WHERE start_time < ?", (cutoff,))
+    # aged-out rows OR rows that no longer meet the duration policy. The second
+    # clause re-applies the current ≥DUR_MIN policy every cycle so legacy games
+    # ingested before the ranked/≥50min pivot (8cd58f9) get swept out instead of
+    # lingering 14 days — that backlog of Turbo/short matches was bloating the DB
+    # (full raw JSON per row) and OOM-killing the board.
+    q = conn.execute("SELECT match_id FROM matches WHERE start_time < ? OR duration_s < ?",
+                     (cutoff, DUR_MIN))
     old = [r[0] for r in q.fetchall()]
     conn.executemany("DELETE FROM match_players WHERE match_id=?", [(x,) for x in old])
-    conn.execute("DELETE FROM matches WHERE start_time < ?", (cutoff,))
+    conn.execute("DELETE FROM matches WHERE start_time < ? OR duration_s < ?", (cutoff, DUR_MIN))
     # ponytail: RETENTION_DAYS not 2 days — a backfilled queue can take days to
     # drain against Stratz's 15k/day cap and must not be pruned mid-drain
     conn.execute("DELETE FROM pending WHERE discovered_at < ?", (cutoff,))
@@ -737,9 +750,17 @@ def score_skill_weirdness(conn):
 # --- RECOMPUTE (derived columns from stored raw, no network) ---
 
 def recompute(conn):
+    # stream one raw at a time — .fetchall() here materialized the whole 1.5GB
+    # corpus in RAM and OOM-killed the process on the 1GB VM. IDs first (tiny),
+    # then fetch+update each raw individually. A separate cursor for the id scan
+    # so the per-row UPDATEs don't disturb an open SELECT on the same statement.
     n = 0
-    for mid, raw in conn.execute("SELECT match_id, raw FROM matches").fetchall():
-        c = derived_cols(json.loads(raw))
+    ids = [r[0] for r in conn.execute("SELECT match_id FROM matches").fetchall()]
+    for mid in ids:
+        row = conn.execute("SELECT raw FROM matches WHERE match_id=?", (mid,)).fetchone()
+        if not row:
+            continue
+        c = derived_cols(json.loads(row[0]))
         conn.execute(
             "UPDATE matches SET " + ", ".join(f"{k}=?" for k in c) + " WHERE match_id=?",
             list(c.values()) + [mid],
