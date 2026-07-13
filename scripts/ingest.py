@@ -34,9 +34,10 @@ RAPIER_ID = 133
 # NONE = played through; DISCONNECTED = brief dc but returned (game still valid).
 # Anything else (ABANDONED, AFK, NEVER_CONNECTED*, DISCONNECTED_TOO_LONG) = abandon.
 LEAVER_OK = {None, "NONE", "DISCONNECTED"}
-# ranked marathons only, >= 50 min: short/ordinary-length games aren't review
-# material, and the >=50min band is where the Herald disasters/comebacks live.
-DUR_MIN = int(os.environ.get("DUR_MIN", "3000"))
+# ranked marathons only, >= 60 min: short/ordinary-length games aren't review
+# material, and the >=60min band is where the Herald disasters/comebacks live.
+# (owner raised 50->60 min on 2026-07-13; board corpus pruned to match)
+DUR_MIN = int(os.environ.get("DUR_MIN", "3600"))
 KPM_MIN = float(os.environ.get("KPM_MIN", "1.0"))
 
 
@@ -47,6 +48,35 @@ def dur_boring(seconds):
 def low_kpm(m):
     kills = sum(m.get("radiantKills") or []) + sum(m.get("direKills") or [])
     return kills / max(m["durationSeconds"] / 60, 1) < KPM_MIN
+
+
+SWING_MIN = int(os.environ.get("SWING_MIN", "3000"))  # gold a reversal must cover
+
+
+def gold_swings(leads, thresh=SWING_MIN):
+    """Count momentum reversals in the networth-lead curve of at least `thresh`
+    gold — a 'gold swing' need NOT cross zero (a big clawback while still behind
+    counts). Zig-zag: extend to new extremes, count each >=thresh reversal."""
+    ext = leads[0] if leads else 0
+    trend = 0  # +1 rising, -1 falling, 0 undetermined
+    swings = 0
+    for v in leads[1:]:
+        if trend == 1:
+            if v > ext:
+                ext = v
+            elif ext - v >= thresh:
+                swings += 1; ext = v; trend = -1
+        elif trend == -1:
+            if v < ext:
+                ext = v
+            elif v - ext >= thresh:
+                swings += 1; ext = v; trend = 1
+        else:
+            if v - ext >= thresh:
+                ext = v; trend = 1
+            elif ext - v >= thresh:
+                ext = v; trend = -1
+    return swings
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "400"))  # safety cap on an Explorer walk
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
 # ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
@@ -135,6 +165,7 @@ def init_db(conn):
                        ("matches", "mastery_sum INTEGER"),  # mastery_avg is a dead column in older DBs
                        ("matches", "megas_comeback INTEGER"), ("matches", "chat_lines INTEGER"),
                        ("matches", "avg_gap REAL"), ("matches", "rapier_count INTEGER"),
+                       ("matches", "gold_swings INTEGER"),
                        ("match_players", "hero_damage INTEGER"),
                        ("match_players", "season_rank INTEGER"),
                        ("match_players", "dota_plus_xp INTEGER")]:
@@ -259,6 +290,7 @@ def derived_cols(raw):
     # multi-minute 1.5GB scan; precomputed here so the board just reads columns)
     avg_gap = sum(abs(x) for x in leads) / max(len(leads), 1)  # mean |networth lead| = closeness
     rapier_count = sum(1 for p in v["players"] for i in p["items"] if i == RAPIER_ID)
+    swings = gold_swings(leads)  # momentum reversals (>=SWING_MIN gold), not just lead flips
     return {
         "kills_r": v["kills_r"], "kills_d": v["kills_d"], "kills": v["kills"], "kpm": v["kpm"],
         "max_lead": v["max_lead"], "min_lead": v["min_lead"], "final_lead": final_lead,
@@ -269,7 +301,7 @@ def derived_cols(raw):
         "has_smurf": has_smurf, "has_feeder": has_feeder, "max_party": max_party,
         "max_apm": max_apm, "max_dplus": max_dplus, "mastery_sum": mastery_sum,
         "megas_comeback": megas_comeback, "chat_lines": chat_lines,
-        "avg_gap": avg_gap, "rapier_count": rapier_count,
+        "avg_gap": avg_gap, "rapier_count": rapier_count, "gold_swings": swings,
     }
 
 
@@ -286,8 +318,8 @@ def upsert_match(conn, raw, avg_rank_tier):
           comeback_gold, throw_gold, feeder_deaths, top_kills, max_gpm,
           winner_towers_lost, has_rapier, raw, enriched_at, lead_flips, hero_damage,
           has_smurf, has_feeder, max_party, max_apm, max_dplus, mastery_sum,
-          megas_comeback, chat_lines, avg_gap, rapier_count
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          megas_comeback, chat_lines, avg_gap, rapier_count, gold_swings
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             mid, raw.get("startDateTime"), raw["durationSeconds"],
@@ -299,7 +331,7 @@ def upsert_match(conn, raw, avg_rank_tier):
             json.dumps(raw), int(time.time()), c["lead_flips"], c["hero_damage"],
             c["has_smurf"], c["has_feeder"], c["max_party"], c["max_apm"], c["max_dplus"],
             c["mastery_sum"], c["megas_comeback"], c["chat_lines"],
-            c["avg_gap"], c["rapier_count"],
+            c["avg_gap"], c["rapier_count"], c["gold_swings"],
         ),
     )
     conn.execute("DELETE FROM match_players WHERE match_id=?", (mid,))
@@ -548,8 +580,9 @@ def score_weirdness(conn):
     items_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "..", "spikes", "menu-v2", "assets", "items.json")
     items = json.load(open(items_path))
+    # 1k floor (was 2k): captures cheaper mid-game item choices as off-meta signal
     fam = {v["id"]: (v.get("dname") or str(v["id"])) for v in items.values()
-           if (v.get("cost") or 0) >= 2000}
+           if (v.get("cost") or 0) >= 1000}
     # two streaming passes over raw — never hold the corpus in memory (1GB VM)
     hcount, htot, gcount = Counter(), Counter(), Counter()
     gtot = 0

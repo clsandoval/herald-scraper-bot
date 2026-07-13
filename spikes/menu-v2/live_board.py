@@ -31,7 +31,7 @@ import os
 # default = Herald Replays (TEST) #replays; prod promotion = flip BOARD_CHANNEL
 CHANNEL = int(os.environ.get("BOARD_CHANNEL", "1392724352155254876"))
 GOLD, GREEN, RED, PURPLE = 0xC8A03C, 0x3BA55D, 0xED4245, 0x9B59B6
-PAGE = 7
+PAGE = 5
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -46,8 +46,11 @@ _conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers at boot
 # separate write conn is needed. discord.py runs callbacks on one loop thread
 # so a single shared write conn is fine.
 _wconn = sqlite3.connect(DB_PATH, check_same_thread=False)
-_wconn.execute("PRAGMA journal_mode=WAL")
+# busy_timeout FIRST: the WAL pragma needs a brief lock, and ingest (which restarts
+# alongside the board) often holds it at boot. Without the timeout set, line-49
+# journal_mode=WAL crashed with "database is locked" -> container restart loop.
 _wconn.execute("PRAGMA busy_timeout=30000")  # shared with ingest loop — wait, don't die
+_wconn.execute("PRAGMA journal_mode=WAL")
 _wconn.execute("CREATE TABLE IF NOT EXISTS usage"
                " (ts INTEGER, user_id INTEGER, user_name TEXT, action TEXT)")
 _wconn.commit()
@@ -58,13 +61,11 @@ def q(sql, params=()):
 
 
 def log_usage(user, action):
-    """Record one usage row (ts, user id/name, action string); never raises."""
-    try:
-        _wconn.execute("INSERT INTO usage(ts, user_id, user_name, action) VALUES (?,?,?,?)",
-                       (int(time.time()), user.id, user.display_name, action))
-        _wconn.commit()
-    except Exception as e:
-        log.warning(f"usage log failed: {e}")
+    """No-op. This used to INSERT+commit on the event-loop thread; under the big
+    WAL + long-lived reader, _wconn.commit() blocked the loop ~30s, froze the
+    gateway heartbeat, and made every interaction fail. The log.info at each call
+    site already records user+action, so the usage table was pure redundancy."""
+    return
 
 
 def hydrate(ids):
@@ -84,51 +85,47 @@ def hydrate(ids):
 STATE = {}  # message_id -> dict
 _thumb_cache = {}  # ponytail: unbounded; fine for a QA process, LRU if it ever matters
 
+# Build the view ON the event loop. discord.py's View.__init__ only wires up the
+# component-dispatch machinery when a running loop is present; building in a
+# worker thread (asyncio.to_thread) leaves the view non-dispatchable, so every
+# button silently no-ops ("interaction failed"). Reads are cheap now (indexed
+# columns over the pruned corpus) and log_usage no longer writes, so a ~1-2s
+# on-loop build (mostly matplotlib for 5 thumbnails) is fine after we defer().
+async def build_board(st):
+    return Board(st)
+
 
 # ---------------- data: sorts / filters / groups as SQL ----------------
 
-# ponytail: lead-flip counts distilled from raw JSON once at startup (~6s);
-# promote to an ingest column if the sort earns its keep
-_conn.execute("""
-    CREATE TEMP TABLE flips AS
-    SELECT match_id,
-           (SELECT count(*) FROM (
-              SELECT value v, LAG(value) OVER (ORDER BY CAST(key AS INT)) pv
-              FROM json_each(matches.raw, '$.radiantNetworthLeads'))
-            WHERE pv IS NOT NULL AND (v > 0) != (pv > 0)) n
-    FROM matches""")
-_conn.execute("CREATE INDEX temp.idx_flips ON flips(match_id)")
-
-# closeness = mean |networth lead| across the whole game (low = wire-to-wire nailbiter)
-_conn.execute("""
-    CREATE TEMP TABLE tight AS
-    SELECT matches.match_id, (SELECT avg(abs(value))
-           FROM json_each(matches.raw, '$.radiantNetworthLeads')) n
-    FROM matches""")
-_conn.execute("CREATE INDEX temp.idx_tight ON tight(match_id)")
-
-# rapier counts from final inventories (item 133); consumed/lost rapiers don't show
-_conn.execute("""
-    CREATE TEMP TABLE rapiers AS
-    SELECT p.match_id, count(*) n FROM match_players p, json_each(p.items) j
-    WHERE j.value = 133 GROUP BY p.match_id""")
-_conn.execute("CREATE INDEX temp.idx_rapiers ON rapiers(match_id)")
-
+# ponytail: flips/avg_gap/rapier_count used to be rebuilt from raw JSON at every
+# board boot — a multi-minute 1.5GB scan that made the board unavailable after
+# each restart. They're now ingest columns (lead_flips already existed); the
+# board just reads them, so boot is a cheap indexed aggregate.
+import math  # noqa: E402
+# board + ingest start together; make sure the sort columns exist before we read
+# them, regardless of which process runs its migration first (read conn re-reads
+# schema on the next statement)
+for _col in ("avg_gap REAL", "rapier_count INTEGER", "gold_swings INTEGER"):
+    try:
+        _wconn.execute(f"ALTER TABLE matches ADD COLUMN {_col}")
+    except sqlite3.OperationalError:
+        pass
+_wconn.commit()
+_HDPM = "coalesce(hero_damage, 0) * 60.0 / duration_s"
+_FLIPS = "coalesce(lead_flips, 0)"
 # watchability = z(kpm) + 0.85*z(hero dmg/min) + 0.7*z(lead flips), stats frozen
 # at startup. z(kpm) capped at +2 so freak 15-min bloodbaths can't drown the rest.
-import math  # noqa: E402
-_HDPM = "coalesce(hero_damage, 0) * 60.0 / duration_s"
-_ST = q(f"SELECT avg(kpm), avg(kpm*kpm), (SELECT avg(n) FROM flips), (SELECT avg(n*n) FROM flips),"
+_ST = q(f"SELECT avg(kpm), avg(kpm*kpm), avg({_FLIPS}), avg({_FLIPS}*{_FLIPS}),"
         f" avg({_HDPM}), avg(({_HDPM}) * ({_HDPM})),"
         f" avg(duration_s), avg(duration_s * 1.0 * duration_s) FROM matches")[0]
 _KPM_A, _KPM_S = _ST[0], math.sqrt(_ST[1] - _ST[0] ** 2)
-_FL_A, _FL_S = _ST[2], math.sqrt(_ST[3] - _ST[2] ** 2)
+_FL_A, _FL_S = _ST[2], math.sqrt(max(_ST[3] - _ST[2] ** 2, 1e-9))
 _HD_A, _HD_S = _ST[4], math.sqrt(max(_ST[5] - _ST[4] ** 2, 1e-9))
 _DU_A, _DU_S = _ST[6], math.sqrt(max(_ST[7] - _ST[6] ** 2, 1e-9))
 # + duration term: the short-game band is where the degenerate stomps live
 _SPICE = (f"(min((kpm - {_KPM_A:.3f}) / {_KPM_S:.3f}, 2.0)"
           f" + 0.85 * (({_HDPM}) - {_HD_A:.1f}) / {_HD_S:.1f}"
-          f" + 0.7 * ((SELECT n FROM flips f WHERE f.match_id = matches.match_id) - {_FL_A:.3f}) / {_FL_S:.3f}"
+          f" + 0.7 * ({_FLIPS} - {_FL_A:.3f}) / {_FL_S:.3f}"
           f" + 0.5 * (duration_s - {_DU_A:.1f}) / {_DU_S:.1f})")
 
 # direction-neutral metrics; the ⬆/⬇ nav button supplies ASC/DESC
@@ -138,12 +135,9 @@ SORTS = {  # key -> (label, ORDER BY expr)
     "kills": ("Total kills", "kills"),
     "kpm": ("Kills per minute", "kpm"),
     "dur": ("Match time", "duration_s"),
-    "tight": ("Average gold gap all game",
-              "(SELECT n FROM tight t WHERE t.match_id = matches.match_id)"),
-    "flips": ("Times the networth lead flipped",
-              "(SELECT n FROM flips f WHERE f.match_id = matches.match_id)"),
-    "rapiers": ("Divine Rapiers held at game end",
-                "coalesce((SELECT n FROM rapiers r WHERE r.match_id = matches.match_id), 0)"),
+    "tight": ("Average gold gap all game", "coalesce(avg_gap, 0)"),
+    "flips": ("Number of big gold swings", "coalesce(gold_swings, 0)"),
+    "rapiers": ("Divine Rapiers held at game end", "coalesce(rapier_count, 0)"),
     "rank": ("Average rank", "avg_rank_tier"),
     "weird": ("Item build weirdness", "coalesce(weirdness, 0)"),
     "skillweird": ("Skill-order weirdness", "coalesce(skill_weirdness, 0)"),
@@ -159,22 +153,22 @@ _RARE_IDS = ",".join(str(r[0]) for r in q(
     "SELECT hero_id FROM match_players GROUP BY hero_id ORDER BY count(*) LIMIT 10"))
 
 FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
-    "rare": ("Features a rarely-picked hero",
+    "rare": ("Rare hero",
              "EXISTS (SELECT 1 FROM match_players p WHERE p.match_id = matches.match_id"
              f" AND p.hero_id IN ({_RARE_IDS}))"),
-    "lowrank": ("Average rank below Herald 3", "matches.avg_rank_tier < 13"),
-    "highrank": ("Average rank Herald 3 or above", "matches.avg_rank_tier >= 13"),
-    "stack5": ("Full 5-player stack", "matches.max_party >= 5"),
-    "apm": ("Has a 500+ APM player", "matches.max_apm >= 500"),
-    "mastery": ("Has a Dota Plus Master+ badge (25+)", "matches.max_dplus >= 25"),
-    "megas": ("Comeback from mega creeps", "matches.megas_comeback = 1"),
+    "lowrank": ("Rank below Herald 3", "matches.avg_rank_tier < 13"),
+    "highrank": ("Rank Herald 3+", "matches.avg_rank_tier >= 13"),
+    "stack5": ("Full 5-stack", "matches.max_party >= 5"),
+    "apm": ("500+ APM player", "matches.max_apm >= 500"),
+    "mastery": ("Master+ badge", "matches.max_dplus >= 25"),
+    "megas": ("Mega-creep comeback", "matches.megas_comeback = 1"),
 }
 # off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
 _W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
           " LIMIT 1 OFFSET (SELECT count(*) * 95 / 100 FROM matches WHERE weirdness IS NOT NULL)")
         or [[None]])[0][0]
 if _W95:
-    FILTERS["weirdf"] = ("Off-meta item build in game", f"matches.weirdness >= {_W95:.2f}")
+    FILTERS["weirdf"] = ("Off-meta item build", f"matches.weirdness >= {_W95:.2f}")
 
 # threshold families: picking two of a kind just ANDs to the stricter one
 for _t in (70, 80):
@@ -256,13 +250,14 @@ def rank_emoji(tier):
 
 
 def _row_section(m, n=None):
-    r = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if p["is_radiant"])
-    d = "".join(render.hero_emoji(p["hero_id"]) or "•" for p in m["players"] if not p["is_radiant"])
+    def side(rad):  # per-hero K/D/A inline: emoji`k/d/a`
+        return " ".join(f"{render.hero_emoji(p['hero_id']) or '•'}`{p['k']}/{p['d']}/{p['a']}`"
+                        for p in m["players"] if bool(p["is_radiant"]) == rad)
     num = f"`{n}` · " if n else ""
     return discord.ui.Section(
         discord.ui.TextDisplay(
             f"{num}{rank_emoji(m.get('art'))}`{m['id']}` · **{m['kills']}** kills"
-            f" · `{render.dur(m['duration'])}`\n{r} ⚔ {d}"),
+            f" · `{render.dur(m['duration'])}`\n{side(True)}\n{side(False)}"),
         accessory=discord.ui.Thumbnail(f"attachment://t{m['id']}.png"),
     )
 
@@ -294,9 +289,11 @@ class Board(discord.ui.LayoutView):
     async def _update(self, itx, **changes):
         self.st.update(changes)
         STATE[itx.message.id] = self.st
-        nv = Board(self.st)
+        # ACK now (<3s), then build off-loop so a slow query can't freeze the heartbeat
+        await itx.response.defer()
+        nv = await build_board(self.st)
         files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
-        await itx.response.edit_message(view=nv, attachments=files)
+        await itx.edit_original_response(view=nv, attachments=files)
         log.info(f"{itx.user} -> {changes}")
         log_usage(itx.user, ",".join(changes) or "noop")
 
@@ -309,7 +306,7 @@ class Board(discord.ui.LayoutView):
             label=f"{v[0]} ({FILT_COUNTS[k]})", value=k,
             default=(k in st["filters"])) for k, v in FILTERS.items()]
         # ponytail: spoiler mode rides in the filter menu — no room for a 6th nav button
-        filt_opts.append(discord.SelectOption(label="🙈 Spoiler mode — hide winners",
+        filt_opts.append(discord.SelectOption(label="🙈 Hide winners (spoiler)",
                                               value="spoiler", default=st["spoiler"]))
         base = st["page"] * PAGE
 
@@ -543,11 +540,11 @@ class AdvModal(discord.ui.Modal, title="Advanced search"):
         # and paging keep working on top of them
         self.st.update(adv=adv, mode="list", page=0)
         STATE[itx.message.id] = self.st
-        nv = Board(self.st)
+        await itx.response.defer()
+        nv = await build_board(self.st)
         files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
-        # response.edit_message works for channel AND ephemeral boards; the old
-        # defer + message.edit path breaks on ephemerals
-        await itx.response.edit_message(view=nv, attachments=files)
+        # edit_original_response works for channel AND ephemeral boards after defer
+        await itx.edit_original_response(view=nv, attachments=files)
         log.info(f"{itx.user} advanced: {adv}")
         log_usage(itx.user, "advanced")
 
@@ -562,9 +559,10 @@ tree = discord.app_commands.CommandTree(client)
 async def board_cmd(itx: discord.Interaction):
     st = default_state()
     st["private"] = True  # ephemeral board — suppress the public "type /heralds" hint
-    v = Board(st)
+    await itx.response.defer(ephemeral=True)
+    v = await build_board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
-    await itx.response.send_message(view=v, files=files, ephemeral=True)
+    await itx.followup.send(view=v, files=files, ephemeral=True)
     msg = await itx.original_response()
     STATE[msg.id] = st
     log.info(f"{itx.user} opened a private board")
@@ -589,7 +587,7 @@ async def on_ready():
             except discord.HTTPException as e:
                 log.warning(f"stale board delete failed: {e}")
     st = default_state()
-    v = Board(st)
+    v = await build_board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
     msg = await ch.send(view=v, files=files)
     STATE[msg.id] = st
@@ -607,7 +605,7 @@ async def refresh_board(msg, every=900):
             st = STATE.get(msg.id)
             if st is None:
                 return  # board replaced
-            nv = Board(st)
+            nv = await build_board(st)
             files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
             await msg.edit(view=nv, attachments=files)
         except discord.NotFound:

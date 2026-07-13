@@ -189,7 +189,9 @@ def player_receipts(rawp, duration_s):
     time_dead = sum(e.get("timeDead") or 0 for e in stats.get("deathEvents") or [])
     gold_fed = sum(e.get("goldFed") or 0 for e in stats.get("deathEvents") or [])
     frac = time_dead / duration_s if duration_s else 0
-    if time_dead >= 1200 or frac >= 0.33:
+    # only flag genuine feeders: dead at least 30% of the game (the old absolute
+    # 20-min OR fired on any long game and triggered too often — owner 2026-07-13)
+    if frac >= 0.30:
         out.append(f"{time_dead // 60} min ({round(frac * 100)}%) dead, fed {gold_fed // 1000}k gold")
 
     used = {u["itemId"]: u.get("count", 0) for u in stats.get("itemUsed") or []}
