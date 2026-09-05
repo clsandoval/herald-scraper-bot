@@ -6,8 +6,6 @@ RUN pip install --no-cache-dir -r board-requirements.txt
 COPY scripts/ingest.py scripts/
 COPY spikes/menu-v2/live_board.py spikes/menu-v2/render.py spikes/menu-v2/charts.py spikes/menu-v2/
 COPY spikes/menu-v2/assets spikes/menu-v2/assets
-# INGEST LOOP PAUSED 2026-07-13: co-locating the heavy SQLite writer with the
-# board caused DB-lock/CPU/memory contention that made interactions fail. Board
-# runs solo on the existing 14-day corpus until ingest is fixed + split out.
-# To restore: python -u scripts/ingest.py --loop 1800 & exec python -u spikes/menu-v2/live_board.py
-CMD ["python", "-u", "spikes/menu-v2/live_board.py"]
+# board is on-demand only now (/heralds, ephemeral) — no more standing render
+# load, so ingest can co-run again.
+CMD python -u scripts/ingest.py --loop 1800 & exec python -u spikes/menu-v2/live_board.py
