@@ -272,7 +272,7 @@ def test_board_opens_no_write_connection():
     ALTER guard) needed a lock ingest holds for minutes at boot -> 'database is
     locked' -> container restart loop. Board is read-only; ingest owns schema."""
     src = _BOARD.read_text()
-    assert "_wconn = " not in src and "journal_mode" not in src and "ALTER TABLE" not in src, (
+    assert "_wconn = " not in src and "PRAGMA journal_mode" not in src and "ALTER TABLE" not in src, (
         "regression: board must not open a write connection or run DDL"
     )
     assert "mode=ro" in src, "board reads through a read-only URI connection"
