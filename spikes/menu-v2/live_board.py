@@ -97,9 +97,19 @@ _HDPM = "coalesce(hero_damage, 0) * 60.0 / duration_s"
 _FLIPS = "coalesce(lead_flips, 0)"
 # watchability = z(kpm) + 0.85*z(hero dmg/min) + 0.7*z(lead flips), stats frozen
 # at startup. z(kpm) capped at +2 so freak 15-min bloodbaths can't drown the rest.
-_ST = q(f"SELECT avg(kpm), avg(kpm*kpm), avg({_FLIPS}), avg({_FLIPS}*{_FLIPS}),"
-        f" avg({_HDPM}), avg(({_HDPM}) * ({_HDPM})),"
-        f" avg(duration_s), avg(duration_s * 1.0 * duration_s) FROM matches")[0]
+# ponytail: boot must survive a busy DB. After an unclean stop ingest runs WAL
+# recovery / a TRUNCATE checkpoint that holds an exclusive lock for minutes;
+# dying here reboots the container (board is PID 1), which kills ingest
+# mid-recovery -> infinite restart loop (2026-09-05). Wait it out instead.
+while True:
+    try:
+        _ST = q(f"SELECT avg(kpm), avg(kpm*kpm), avg({_FLIPS}), avg({_FLIPS}*{_FLIPS}),"
+                f" avg({_HDPM}), avg(({_HDPM}) * ({_HDPM})),"
+                f" avg(duration_s), avg(duration_s * 1.0 * duration_s) FROM matches")[0]
+        break
+    except sqlite3.OperationalError as e:
+        log.warning(f"boot query failed ({e}); DB busy, retrying in 15s")
+        time.sleep(15)
 _KPM_A, _KPM_S = _ST[0], math.sqrt(_ST[1] - _ST[0] ** 2)
 _FL_A, _FL_S = _ST[2], math.sqrt(max(_ST[3] - _ST[2] ** 2, 1e-9))
 _HD_A, _HD_S = _ST[4], math.sqrt(max(_ST[5] - _ST[4] ** 2, 1e-9))
