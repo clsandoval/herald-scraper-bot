@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: "Phase 1: Waves 1-2 complete; Wave 3 (live deploy) held pending Anthropic MA key + paid-infra go-ahead"
-last_updated: "2026-07-01T12:40:49.140Z"
-last_activity: 2026-07-01
+last_updated: "2026-09-05T05:30:00.000Z"
+last_activity: 2026-09-05
 progress:
   total_phases: 6
   completed_phases: 0
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-07-01)
 Phase: 1 (Clean Platform Skeleton) — EXECUTING
 Plan: 3 of 3 (plan 01-01 complete)
 Status: Ready to execute
-Last activity: 2026-07-12 - Completed quick task 260712-nr8: Board signals (megas, talkative, receipts)
+Last activity: 2026-09-05 - Completed quick task 260905-7ag: on-demand /heralds board, eternal board retired, ingest un-paused (code only; deploy pending Fly login)
 
 Progress: [███████░░░] 67%
 
@@ -85,6 +85,7 @@ Recent decisions affecting current work:
 | 260711-wqo | Board usage telemetry (ts + Discord user per interaction / /heralds use) into `usage` table + /heralds hint on public board | 2026-07-11 | fcacedf | [260711-wqo-add-usage-telemetry-timestamp-discord-us](./quick/260711-wqo-add-usage-telemetry-timestamp-discord-us/) |
 | 260712-6p2 | Skill-order weirdness column + GM badge surfacing + ranked-only/≥50min/14-day ingest pivot | 2026-07-12 | 8cd58f9 | [260712-6p2-skill-weirdness-column-grandmaster-badge](./quick/260712-6p2-skill-weirdness-column-grandmaster-badge/) |
 | 260712-nr8 | Board signals: megas-comeback filter, talkative sort, spoiler-aware feeding/item-shame receipts | 2026-07-12 | c958e74 | [260712-nr8-board-signals-megas-comeback-chat-lines-](./quick/260712-nr8-board-signals-megas-comeback-chat-lines-/) |
+| 260905-7ag | On-demand `/heralds` board, eternal board + refresh loop deleted, ingest un-paused in Dockerfile.board (issue #4 part 1; NOT yet deployed) | 2026-09-05 | 6a67be2 | [260905-7ag-on-demand-heralds-board-retire-eternal-b](./quick/260905-7ag-on-demand-heralds-board-retire-eternal-b/) |
 
 ## Deferred Items
 
