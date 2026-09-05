@@ -1,6 +1,7 @@
 """LIVE Match Board — SQL-backed, exhaustive over herald.db.
 
-Posts one board message to test #replays and keeps running. Every control
+Opened on demand via `/heralds` (ephemeral, private to the caller) and posts
+nothing on its own. Every control
 works: sort, multi-filter, open match, paging, dice,
 advanced modal. Every interaction is a SQL query against herald.db — the
 board covers everything ingest has enriched (10-day retention); raw JSON is
@@ -28,8 +29,6 @@ log = logging.getLogger("live_board")
 
 import os
 
-# default = Herald Replays (TEST) #replays; prod promotion = flip BOARD_CHANNEL
-CHANNEL = int(os.environ.get("BOARD_CHANNEL", "1392724352155254876"))
 GOLD, GREEN, RED, PURPLE = 0xC8A03C, 0x3BA55D, 0xED4245, 0x9B59B6
 PAGE = 5
 
@@ -384,9 +383,6 @@ class Board(discord.ui.LayoutView):
         for s in (sel_sort, sel_filt, sel_open):
             c.add_item(discord.ui.ActionRow(s))
         c.add_item(self._nav_row(pages))
-        if not self.st.get("private"):
-            c.add_item(discord.ui.TextDisplay(
-                "-# 💡 Type `/heralds` anywhere to open your own private board only you can see."))
         self.add_item(c)
 
     # ---- focus / graph ----
@@ -558,7 +554,6 @@ tree = discord.app_commands.CommandTree(client)
 @tree.command(name="heralds", description="Open a private Herald match board only you can see")
 async def board_cmd(itx: discord.Interaction):
     st = default_state()
-    st["private"] = True  # ephemeral board — suppress the public "type /heralds" hint
     await itx.response.defer(ephemeral=True)
     v = await build_board(st)
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
@@ -576,42 +571,6 @@ async def on_ready():
         tree.copy_global_to(guild=g)
         await tree.sync(guild=g)
     log.info(f"slash commands synced to {len(client.guilds)} guilds")
-    ch = client.get_channel(CHANNEL) or await client.fetch_channel(CHANNEL)
-    # replace any board we posted before a restart — only components-v2 messages,
-    # never the bot's plain-text posts (same account as the old daily reporter)
-    async for old in ch.history(limit=30):
-        if old.author == client.user and old.flags.value & 32768:
-            try:
-                await old.delete()
-                log.info(f"deleted stale board {old.id}")
-            except discord.HTTPException as e:
-                log.warning(f"stale board delete failed: {e}")
-    st = default_state()
-    v = await build_board(st)
-    files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
-    msg = await ch.send(view=v, files=files)
-    STATE[msg.id] = st
-    log.info(f"LIVE board posted: https://discord.com/channels/{msg.guild.id}/{ch.id}/{msg.id}")
-    client.loop.create_task(refresh_board(msg))
-
-
-async def refresh_board(msg, every=900):
-    """The 'live' board previously only re-rendered on clicks and could sit
-    days stale — re-render it from the DB on a timer. User clicks between
-    ticks are safe: we rebuild from the same STATE entry they mutate."""
-    while True:
-        await asyncio.sleep(every)
-        try:
-            st = STATE.get(msg.id)
-            if st is None:
-                return  # board replaced
-            nv = await build_board(st)
-            files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
-            await msg.edit(view=nv, attachments=files)
-        except discord.NotFound:
-            return  # board deleted; a restart will post a fresh one
-        except Exception as e:
-            log.warning(f"board refresh failed: {e}")
 
 
 if __name__ == "__main__":
