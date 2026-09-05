@@ -41,18 +41,10 @@ DB_PATH = os.environ.get("HERALD_DB", str(REPO / "herald.db"))
 _conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False)
 _conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers at boot — wait, don't die
 
-# ponytail: _conn above is read-only (mode=ro) and can't write telemetry; a
-# separate write conn is needed. discord.py runs callbacks on one loop thread
-# so a single shared write conn is fine.
-_wconn = sqlite3.connect(DB_PATH, check_same_thread=False)
-# busy_timeout FIRST: the WAL pragma needs a brief lock, and ingest (which restarts
-# alongside the board) often holds it at boot. Without the timeout set, line-49
-# journal_mode=WAL crashed with "database is locked" -> container restart loop.
-_wconn.execute("PRAGMA busy_timeout=30000")  # shared with ingest loop — wait, don't die
-_wconn.execute("PRAGMA journal_mode=WAL")
-_wconn.execute("CREATE TABLE IF NOT EXISTS usage"
-               " (ts INTEGER, user_id INTEGER, user_name TEXT, action TEXT)")
-_wconn.commit()
+# ponytail: NO write connection. Any write pragma/DDL here (journal_mode, CREATE,
+# ALTER) needs a lock ingest holds for minutes at boot (discover runs one long
+# txn) -> 'database is locked' -> container restart loop (2026-09-05). ingest
+# owns the schema (its connect() migrates every column the board reads).
 
 
 def q(sql, params=()):
@@ -101,15 +93,6 @@ async def build_board(st):
 # each restart. They're now ingest columns (lead_flips already existed); the
 # board just reads them, so boot is a cheap indexed aggregate.
 import math  # noqa: E402
-# board + ingest start together; make sure the sort columns exist before we read
-# them, regardless of which process runs its migration first (read conn re-reads
-# schema on the next statement)
-for _col in ("avg_gap REAL", "rapier_count INTEGER", "gold_swings INTEGER"):
-    try:
-        _wconn.execute(f"ALTER TABLE matches ADD COLUMN {_col}")
-    except sqlite3.OperationalError:
-        pass
-_wconn.commit()
 _HDPM = "coalesce(hero_damage, 0) * 60.0 / duration_s"
 _FLIPS = "coalesce(lead_flips, 0)"
 # watchability = z(kpm) + 0.85*z(hero dmg/min) + 0.7*z(lead flips), stats frozen

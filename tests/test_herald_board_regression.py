@@ -265,3 +265,14 @@ def test_board_is_on_demand_only():
     assert "ch.send(" not in src, (
         "regression: on_ready must not post a standing board to a channel"
     )
+
+
+def test_board_opens_no_write_connection():
+    """2026-09-05: the board's boot-time write conn (journal_mode=WAL, CREATE,
+    ALTER guard) needed a lock ingest holds for minutes at boot -> 'database is
+    locked' -> container restart loop. Board is read-only; ingest owns schema."""
+    src = _BOARD.read_text()
+    assert "_wconn = " not in src and "journal_mode" not in src and "ALTER TABLE" not in src, (
+        "regression: board must not open a write connection or run DDL"
+    )
+    assert "mode=ro" in src, "board reads through a read-only URI connection"
