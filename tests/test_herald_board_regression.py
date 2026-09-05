@@ -248,3 +248,20 @@ def test_board_sorts_read_columns_not_raw_json():
         "regression: no boot-time temp tables — derived sorts are ingest columns "
         "(lead_flips, avg_gap, rapier_count)"
     )
+
+
+def test_board_is_on_demand_only():
+    """2026-09-05: the always-up board caused DB-lock/CPU/OOM contention with
+    ingest; on-demand only, ingest un-paused — issue #4. This guards that the
+    eternal board (standing channel post + timer re-render) never comes back
+    and that /heralds stays the sole entry point."""
+    src = _BOARD.read_text()
+    assert "refresh_board" not in src, (
+        "regression: no timed re-render of a standing board message"
+    )
+    assert 'name="heralds"' in src and "async def board_cmd" in src, (
+        "the /heralds slash command must still be registered"
+    )
+    assert "ch.send(" not in src, (
+        "regression: on_ready must not post a standing board to a channel"
+    )
