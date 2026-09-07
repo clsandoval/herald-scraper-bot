@@ -18,6 +18,7 @@ import pathlib
 import sqlite3
 import sys
 import time
+from collections import OrderedDict
 
 import discord
 
@@ -37,18 +38,33 @@ sys.path.insert(0, str(REPO / "scripts"))
 import ingest  # noqa: E402  match_view = the one true row shape
 
 DB_PATH = os.environ.get("HERALD_DB", str(REPO / "herald.db"))
-# ponytail: one read-only conn; discord.py runs all callbacks on one loop thread
-_conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, check_same_thread=False)
-_conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers at boot — wait, don't die
 
-# ponytail: NO write connection. Any write pragma/DDL here (journal_mode, CREATE,
-# ALTER) needs a lock ingest holds for minutes at boot (discover runs one long
-# txn) -> 'database is locked' -> container restart loop (2026-09-05). ingest
-# owns the schema (its connect() migrates every column the board reads).
+# ponytail: NO shared conn, NO write connection. The old single `_conn`
+# (check_same_thread=False) was touched directly on discord.py's one loop
+# thread, so every sync query + matplotlib render blocked the gateway
+# heartbeat; while ingest --loop holds the WAL/exclusive lock for minutes,
+# busy_timeout=30s turned instant failure into a 30s loop stall and every
+# interaction timed out. Every read below opens a FRESH read-only conn inside
+# a worker thread (asyncio.to_thread), waits on busy_timeout OFF-loop, then
+# closes it. Any write pragma/DDL here (journal_mode, CREATE, ALTER) needs a
+# lock ingest holds for minutes at boot -> 'database is locked' -> container
+# restart loop (2026-09-05). ingest owns the schema (its connect() migrates
+# every column the board reads).
 
 
-def q(sql, params=()):
-    return _conn.execute(sql, params).fetchall()
+def _q_sync(sql, params=()):
+    """Sync read on a worker thread only — never call from the loop thread."""
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30.0)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")  # ingest writes/WAL-recovers — wait off-loop
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+async def q(sql, params=()):
+    """Off-loop read: fresh RO conn per call, heartbeat never stalls on a locked DB."""
+    return await asyncio.to_thread(_q_sync, sql, params)
 
 
 def log_usage(user, action):
@@ -59,12 +75,12 @@ def log_usage(user, action):
     return
 
 
-def hydrate(ids):
+async def hydrate(ids):
     """match_ids -> match_view dicts; raw JSON parsed only for these rows."""
     if not ids:
         return []
-    rows = q("SELECT match_id, raw, avg_rank_tier FROM matches"
-             f" WHERE match_id IN ({','.join('?' * len(ids))})", list(ids))
+    rows = await q("SELECT match_id, raw, avg_rank_tier FROM matches"
+                   f" WHERE match_id IN ({','.join('?' * len(ids))})", list(ids))
     by_id = {}
     for r in rows:
         v = ingest.match_view(json.loads(r[1]))
@@ -73,17 +89,42 @@ def hydrate(ids):
     return [by_id[i] for i in ids if i in by_id]
 
 
-STATE = {}  # message_id -> dict
-_thumb_cache = {}  # ponytail: unbounded; fine for a QA process, LRU if it ever matters
+MAX_STATE = 500  # bound per-message board state; discord messages are ephemeral
+STATE = OrderedDict()  # message_id -> dict, oldest evicted first
 
-# Build the view ON the event loop. discord.py's View.__init__ only wires up the
+
+def _state_set(msg_id, st):
+    STATE[msg_id] = st
+    while len(STATE) > MAX_STATE:
+        STATE.popitem(last=False)
+
+
+MAX_THUMBS = 200  # bound matplotlib PNG cache; evict oldest id first
+_thumb_cache = OrderedDict()  # id -> png bytes
+
+# Data fetch + PNG bytes happen in worker threads; the View itself MUST be
+# built on the event loop. discord.py's View.__init__ only wires up the
 # component-dispatch machinery when a running loop is present; building in a
-# worker thread (asyncio.to_thread) leaves the view non-dispatchable, so every
-# button silently no-ops ("interaction failed"). Reads are cheap now (indexed
-# columns over the pruned corpus) and log_usage no longer writes, so a ~1-2s
-# on-loop build (mostly matplotlib for 5 thumbnails) is fine after we defer().
+# worker thread leaves the view non-dispatchable, so every button silently
+# no-ops ("interaction failed"). So: await data off-loop, construct on-loop.
 async def build_board(st):
-    return Board(st)
+    if st.get("mode") == "focus":
+        ms = await hydrate([st["match"]])
+        m = ms[0]
+        chart = await asyncio.to_thread(
+            charts.networth_lead_png, m["leads"], f"Match {m['id']} — Net Worth Lead")
+        row = await q("SELECT weirdness, weird_notes FROM matches WHERE match_id=?", (m["id"],))
+        srow = await q("SELECT skill_weirdness, skill_notes FROM matches WHERE match_id=?",
+                       (m["id"],))
+        raw_row = await q("SELECT raw FROM matches WHERE match_id=?", (m["id"],))
+        focus_data = {"m": m, "row": row, "srow": srow, "raw_row": raw_row}
+        return Board(st, focus_data=focus_data,
+                     files=[(f"g{m['id']}.png", chart)])
+    total, page, span = await select_page(st)
+    files = []
+    for m in page:
+        files.append((f"t{m['id']}.png", await thumb(m)))
+    return Board(st, list_data=(total, page, span), files=files)
 
 
 # ---------------- data: sorts / filters / groups as SQL ----------------
@@ -103,7 +144,7 @@ _FLIPS = "coalesce(lead_flips, 0)"
 # mid-recovery -> infinite restart loop (2026-09-05). Wait it out instead.
 while True:
     try:
-        _ST = q(f"SELECT avg(kpm), avg(kpm*kpm), avg({_FLIPS}), avg({_FLIPS}*{_FLIPS}),"
+        _ST = _q_sync(f"SELECT avg(kpm), avg(kpm*kpm), avg({_FLIPS}), avg({_FLIPS}*{_FLIPS}),"
                 f" avg({_HDPM}), avg(({_HDPM}) * ({_HDPM})),"
                 f" avg(duration_s), avg(duration_s * 1.0 * duration_s) FROM matches")[0]
         break
@@ -141,7 +182,7 @@ PREF_DIR = {"rank": "ASC",   # lowest-rank games are the draw
             "tight": "ASC"}  # smallest average gap = the nailbiters
 
 # ponytail: "uncommon" = the 10 least-picked heroes, frozen at startup (~15% of matches)
-_RARE_IDS = ",".join(str(r[0]) for r in q(
+_RARE_IDS = ",".join(str(r[0]) for r in _q_sync(
     "SELECT hero_id FROM match_players GROUP BY hero_id ORDER BY count(*) LIMIT 10"))
 
 FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
@@ -156,7 +197,7 @@ FILTERS = {  # key -> (label, WHERE expr; matches.-qualified so joins work too)
     "megas": ("Mega-creep comeback", "matches.megas_comeback = 1"),
 }
 # off-meta cutoff = empirical 95th percentile, not mean-based (long right tail IS the signal)
-_W95 = (q("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
+_W95 = (_q_sync("SELECT weirdness FROM matches WHERE weirdness IS NOT NULL ORDER BY weirdness"
           " LIMIT 1 OFFSET (SELECT count(*) * 95 / 100 FROM matches WHERE weirdness IS NOT NULL)")
         or [[None]])[0][0]
 if _W95:
@@ -167,7 +208,7 @@ for _t in (70, 80):
     FILTERS[f"war{_t}"] = (f"Longer than {_t} min", f"matches.duration_s >= {_t * 60}")
 
 # option-label counts over the whole table, computed once at startup
-FILT_COUNTS = dict(zip(FILTERS, q(
+FILT_COUNTS = dict(zip(FILTERS, _q_sync(
     "SELECT " + ", ".join(f"sum({e})" for _, e in FILTERS.values()) + " FROM matches")[0]))
 
 
@@ -176,8 +217,7 @@ def default_state():
             "page": 0, "match": None, "adv": None, "spoiler": False}
 
 
-def adv_conds(a):
-    """Advanced-modal criteria as WHERE fragments (ops/ints are whitelisted/cast)."""
+async def adv_conds(a):
     conds = []
     if a.get("dur"):
         op, n = a["dur"]
@@ -187,7 +227,7 @@ def adv_conds(a):
     if a.get("rank"):
         op, n = a["rank"]
         conds.append(f"(matches.avg_rank_tier {op} {int(n)})")
-    hero_ids = {r[0] for r in q("SELECT DISTINCT hero_id FROM match_players")}
+    hero_ids = {r[0] for r in await q("SELECT DISTINCT hero_id FROM match_players")}
     for h in a.get("heroes") or []:
         ids = [hid for hid in hero_ids if h in render.hero_name(hid).lower()]
         conds.append(
@@ -202,38 +242,45 @@ def adv_conds(a):
     return conds
 
 
-def build_where(st):
+async def build_where(st):
     conds = [FILTERS[f][1] for f in st["filters"]]
     if st.get("adv"):
-        conds += adv_conds(st["adv"])
+        conds += await adv_conds(st["adv"])
     return (" WHERE " + " AND ".join(conds)) if conds else "", []
 
 
-def select_page(st):
-    where, params = build_where(st)
-    total, lo, hi = q(f"SELECT count(*), min(start_time), max(start_time) FROM matches{where}",
-                      params)[0]
+async def select_page(st):
+    where, params = await build_where(st)
+    total, lo, hi = (await q(
+        f"SELECT count(*), min(start_time), max(start_time) FROM matches{where}",
+        params))[0]
     span = ""
     if lo:
         import datetime
         f = lambda t: datetime.datetime.utcfromtimestamp(t).strftime("%b %-d")
         span = f(lo) if f(lo) == f(hi) else f"{f(lo)} – {f(hi)}"
     order = ", ".join(f"{SORTS[k][1]} {st['dir']}" for k in st["sort"])
-    rows = q(f"SELECT match_id FROM matches{where} ORDER BY {order}"
-             " LIMIT ? OFFSET ?", params + [PAGE, st["page"] * PAGE])
-    return total, hydrate([r[0] for r in rows]), span
+    rows = await q(f"SELECT match_id FROM matches{where} ORDER BY {order}"
+                   " LIMIT ? OFFSET ?", params + [PAGE, st["page"] * PAGE])
+    return total, await hydrate([r[0] for r in rows]), span
 
 
-def random_match_id():
-    return q("SELECT match_id FROM matches ORDER BY RANDOM() LIMIT 1")[0][0]
+async def random_match_id():
+    return (await q("SELECT match_id FROM matches ORDER BY RANDOM() LIMIT 1"))[0][0]
 
 
 # ---------------- rendering ----------------
 
-def thumb(m):
-    if m["id"] not in _thumb_cache:
-        _thumb_cache[m["id"]] = charts.thumb_spark_png(m["leads"])
-    return _thumb_cache[m["id"]]
+async def thumb(m):
+    hit = _thumb_cache.get(m["id"])
+    if hit is None:
+        hit = await asyncio.to_thread(charts.thumb_spark_png, m["leads"])
+        _thumb_cache[m["id"]] = hit
+        while len(_thumb_cache) > MAX_THUMBS:
+            _thumb_cache.popitem(last=False)
+    else:
+        _thumb_cache.move_to_end(m["id"])
+    return hit
 
 
 def rank_emoji(tier):
@@ -270,17 +317,19 @@ def _btn(custom_id, label, cb, style=discord.ButtonStyle.secondary, url=None):
 
 
 class Board(discord.ui.LayoutView):
-    def __init__(self, st):
+    def __init__(self, st, list_data=None, focus_data=None, files=None):
         super().__init__(timeout=None)
         self.st = st
-        self.files = []
-        build = {"list": self._list, "focus": self._focus}[st["mode"]]
-        build()
+        self.files = files or []
+        if st["mode"] == "focus":
+            self._focus(focus_data)
+        else:
+            self._list(list_data)
 
     # ---- interactions plumbing ----
     async def _update(self, itx, **changes):
         self.st.update(changes)
-        STATE[itx.message.id] = self.st
+        _state_set(itx.message.id, self.st)
         # ACK now (<3s), then build off-loop so a slow query can't freeze the heartbeat
         await itx.response.defer()
         nv = await build_board(self.st)
@@ -337,7 +386,7 @@ class Board(discord.ui.LayoutView):
             await self._update(itx, page=min(pages - 1, st["page"] + 1))
 
         async def dice(itx):
-            await self._update(itx, match=random_match_id(), mode="focus")
+            await self._update(itx, match=await random_match_id(), mode="focus")
 
         async def adv(itx):
             await itx.response.send_modal(AdvModal(self.st))
@@ -354,11 +403,10 @@ class Board(discord.ui.LayoutView):
         )
         return row
 
-    def _list(self):
+    def _list(self, list_data):
         st = self.st
-        total, page, span = select_page(st)
+        total, page, span = list_data
         pages = max(1, (total + PAGE - 1) // PAGE)
-        self.files = [(f"t{m['id']}.png", thumb(m)) for m in page]
         span_txt = f" · {span}" if span else ""
         filt_txt = f" · filters: {len(st['filters'])}" if st["filters"] else ""
         adv_txt = " · ⚙️ advanced on (submit empty form to clear)" if st["adv"] else ""
@@ -379,10 +427,11 @@ class Board(discord.ui.LayoutView):
         self.add_item(c)
 
     # ---- focus / graph ----
-    def _focus(self):
-        m = hydrate([self.st["match"]])[0]
-        self.files = [(f"g{m['id']}.png", charts.networth_lead_png(
-            m["leads"], f"Match {m['id']} — Net Worth Lead"))]
+    def _focus(self, focus_data):
+        m = focus_data["m"]
+        row = focus_data["row"]
+        srow = focus_data["srow"]
+        raw_row = focus_data["raw_row"]
         r = sorted([p for p in m["players"] if p["is_radiant"]], key=lambda p: -p["networth"])
         d = sorted([p for p in m["players"] if not p["is_radiant"]], key=lambda p: -p["networth"])
         sp = self.st.get("spoiler")
@@ -399,7 +448,6 @@ class Board(discord.ui.LayoutView):
         c.add_item(discord.ui.Separator())
         c.add_item(discord.ui.TextDisplay("**Dire**\n" + "\n".join(render.player_line(p) for p in d)))
         # off-meta build receipts — why this match scores weird (purchases, not final items)
-        row = q("SELECT weirdness, weird_notes FROM matches WHERE match_id=?", (m["id"],))
         if row and (row[0][0] or 0) >= 6 and row[0][1]:
             lines = []
             for note in json.loads(row[0][1]):
@@ -410,7 +458,6 @@ class Board(discord.ui.LayoutView):
             if lines:
                 c.add_item(discord.ui.TextDisplay("🌀 **Off-meta item builds**\n" + "\n".join(lines)))
         # skill-order weirdness receipts — why this match scores weird on ability picks
-        srow = q("SELECT skill_weirdness, skill_notes FROM matches WHERE match_id=?", (m["id"],))
         if srow and (srow[0][0] or 0) >= 8 and srow[0][1]:
             lines = []
             for note in json.loads(srow[0][1]):
@@ -435,7 +482,6 @@ class Board(discord.ui.LayoutView):
         # Per-player feeding/shame receipts + megas match tag (spike signal-mining).
         # Receipts are winner-neutral and render regardless of spoiler; the
         # megas tag is outcome-revealing and is suppressed under spoiler mode.
-        raw_row = q("SELECT raw FROM matches WHERE match_id=?", (m["id"],))
         if raw_row:
             raw = json.loads(raw_row[0][0])
             lines = []
@@ -460,7 +506,7 @@ class Board(discord.ui.LayoutView):
             await self._update(itx, mode="list", match=None)
 
         async def dice(itx):
-            await self._update(itx, match=random_match_id())
+            await self._update(itx, match=await random_match_id())
 
         c.add_item(discord.ui.ActionRow(
             _btn("mb_b", "◀ Board", back),
@@ -528,7 +574,7 @@ class AdvModal(discord.ui.Modal, title="Advanced search"):
         # advanced criteria are extra WHERE conds on the normal list — sorting
         # and paging keep working on top of them
         self.st.update(adv=adv, mode="list", page=0)
-        STATE[itx.message.id] = self.st
+        _state_set(itx.message.id, self.st)
         await itx.response.defer()
         nv = await build_board(self.st)
         files = [discord.File(io.BytesIO(b), filename=n) for n, b in nv.files]
@@ -552,7 +598,7 @@ async def board_cmd(itx: discord.Interaction):
     files = [discord.File(io.BytesIO(b), filename=n) for n, b in v.files]
     await itx.followup.send(view=v, files=files, ephemeral=True)
     msg = await itx.original_response()
-    STATE[msg.id] = st
+    _state_set(msg.id, st)
     log.info(f"{itx.user} opened a private board")
     log_usage(itx.user, "slash:/heralds")
 
