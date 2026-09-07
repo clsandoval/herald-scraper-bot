@@ -402,9 +402,15 @@ def explorer_fetch(client, sql):
 
 def discover(conn, days=RETENTION_DAYS):
     """Exhaustive discovery: keyset-paginate Explorer's public_matches (PK index
-    walk — start_time range scans time out server-side) newest-first, rank +
-    duration filtered in SQL. Stops at `days` back, at a fully-known page (the
-    frontier — everything older is already discovered), or at MAX_PAGES."""
+    walk — start_time range scans time out server-side) newest-first, rank
+    filtered in SQL, lobby/duration filtered client-side. The lobby+duration
+    predicates MUST stay client-side: pushing them into SQL makes the scan so
+    sparse (Herald+ranked+60min is ~0.1% of public_matches) that Explorer
+    exceeds its read budget and 400s every page (verified 2026-09-07 — rank-only
+    LIMIT 100 answers in ~0.2s at any depth, the composite filter times out
+    even at LIMIT 100). Small pages bound the scan cost at every depth.
+    Stops at `days` back, at a fully-known page (the frontier — everything
+    older is already discovered), or at MAX_PAGES."""
     now = int(time.time())
     cutoff = now - days * 86400
     pre = {r[0] for r in conn.execute("SELECT match_id FROM matches").fetchall()}
@@ -416,10 +422,10 @@ def discover(conn, days=RETENTION_DAYS):
             frontier = f"AND match_id < {int(last)} " if last else ""
             rows = explorer_fetch(
                 client,
-                "SELECT match_id, start_time, avg_rank_tier FROM public_matches "
+                "SELECT match_id, start_time, avg_rank_tier, lobby_type, duration "
+                "FROM public_matches "
                 f"WHERE avg_rank_tier BETWEEN 10 AND 15 {frontier}"
-                f"AND lobby_type = 7 AND duration >= {DUR_MIN} "
-                "ORDER BY match_id DESC LIMIT 1000",
+                "ORDER BY match_id DESC LIMIT 100",
             )
             if rows is None:
                 log.warning(f"discover: explorer gave up after {queued} queued, using what we have")
@@ -429,6 +435,8 @@ def discover(conn, days=RETENTION_DAYS):
             novel = [r for r in rows if r["match_id"] not in pre and r["start_time"] >= cutoff]
             for r in novel:
                 pre.add(r["match_id"])
+                if r.get("lobby_type") != 7 or (r.get("duration") or 0) < DUR_MIN:
+                    continue  # ranked marathons only — filtered here, not in SQL (see docstring)
                 conn.execute(
                     "INSERT OR IGNORE INTO pending("
                     "match_id,avg_rank_tier,start_time,discovered_at,attempts,last_attempt"
