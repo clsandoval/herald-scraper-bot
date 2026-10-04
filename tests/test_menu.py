@@ -74,8 +74,35 @@ async def test_random_acknowledges_before_query(db, monkeypatch):
     await view._update(interaction, random=True)
     interaction.edit_original_response.assert_awaited_once()
 
-async def test_full_receipts_fit_discord_text_budget(db):
+@pytest.mark.parametrize('long_names', [False, True])
+async def test_focus_item_names_without_application_emojis(db, monkeypatch, long_names):
     from herald import render
+    monkeypatch.setattr(render, '_emoji', {})
+    items = [1, 116, 65, 133, 108, 112]
+    if long_names:
+        items = sorted(render._item_by_id, key=lambda i: len(render.item_name(i)),
+                       reverse=True)[:6]
+    raw = raw_match()
+    for p in raw['players']:
+        p.update({f'item{i}Id': item for i, item in enumerate(items)})
+    ingest.upsert_match(db, raw, 12)
+    state = board.default_state(); state.update(mode='focus', match=1)
+    view = await board.build_board(state)
+    texts = [item.content for item in view.walk_children()
+             if isinstance(item, board.discord.ui.TextDisplay)]
+    assert sum(map(len, texts)) <= render.MAX_CHARS
+    for team in texts[1:3]:
+        player_lines = team.splitlines()[1:]
+        assert len(player_lines) == 5
+        for line in player_lines:
+            for iid in items:
+                assert render.item_name(iid) in line
+            assert '▫' not in line and '…' not in line
+
+
+async def test_full_receipts_fit_discord_text_budget(db, monkeypatch):
+    from herald import render
+    monkeypatch.setattr(render, '_emoji', {})
     raw = raw_match()
     for p in raw['players']:
         p.update({f'item{i}Id': item for i, item in enumerate([1,116,65,133,108,112])})
@@ -94,6 +121,12 @@ async def test_full_receipts_fit_discord_text_budget(db):
     content = json.dumps(view.to_components())
     assert 'Radiant' in content and 'Dire' in content
     assert 'Additional receipts omitted' in content
+    texts = [item.content for item in view.walk_children()
+             if isinstance(item, board.discord.ui.TextDisplay)]
+    for team in texts[1:3]:
+        assert team.count('Black King Bar') == 5
+        assert team.count('Assault Cuirass') == 5
+        assert '…' not in team
 
 async def test_zero_scores_are_not_labeled_anomalous(db):
     ingest.upsert_match(db, raw_match(), 12)

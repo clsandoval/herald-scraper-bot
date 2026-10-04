@@ -27,3 +27,9 @@ No live API validation, Discord sends, deployments, pushes, secret rotations, co
 - Added a container entrypoint to prepare fresh volume-directory ownership before dropping to UID/GID 1000; existing DB-file ownership still requires explicit migration.
 - Validation: `uv run pytest -q`: 45 passed (one third-party audioop deprecation warning); all three ingest selfchecks pass; offline wheel/sdist build passes; all four repository Mermaid blocks parse with Mermaid 11; all current local doc links and both Fly TOMLs validate. README environment inventory matches code exactly.
 - No live operations or push; protected worker files were not inspected or changed. Docker/Fly execution and real Discord/API delivery remain untested within the authorized offline scope.
+
+## Reviewer corrections — round 2
+
+- Missing application item emojis now fall back to readable item names; complete emoji inventories retain their compact strips. Offline focus tests cover all ten populated inventories, typical and longest bundled names, and optional-receipt trimming without losing core item identities. Existing board budget handling needed no change.
+- Both Fly credential-import examples use standard `grep -E`. The optional local supervisor command now uses `uv run --env-file .env python -m herald.menu_service`; its children inherit that environment and Python executable.
+- Validation: `uv run pytest -q`: 47 passed, one third-party audioop deprecation warning; `git diff --check` passes. Fly filters checked against synthetic input only. No live operations, push, or protected-path inspection/changes.

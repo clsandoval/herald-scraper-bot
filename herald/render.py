@@ -92,8 +92,11 @@ def load_matches():
 
 
 def item_icons(p, n=6):
-    """Inline item emoji strip; missing emojis render as ▫."""
-    return "".join(item_emoji(i) or "▫" for i in p["items"][:n])
+    """Inline items; use readable names when application emojis are missing."""
+    items = [item_emoji(i) or item_name(i) for i in p["items"][:n]]
+    # Preserve the compact strip when every item has an emoji.
+    separator = "" if all(item_emoji(i) for i in p["items"][:n]) else ", "
+    return separator.join(items)
 
 
 def player_line(p, stat=""):

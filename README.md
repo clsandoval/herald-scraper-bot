@@ -75,7 +75,8 @@ uv run --env-file .env python -m herald ingest
 # After at least three minutes:
 uv run --env-file .env python -m herald ingest
 uv run --env-file .env python -m herald menu
-# Only for continuous experiments: python -m herald.menu_service (both processes).
+# Only for continuous experiments (both processes):
+uv run --env-file .env python -m herald.menu_service
 ```
 
 <details>
@@ -121,7 +122,7 @@ Reporter ([fly.toml](fly.toml), `sea`, 512MB):
 report_app=your-unique-herald-reporter  # also edit app in fly.toml
 fly apps create "$report_app"
 fly volumes create herald_reports --app "$report_app" --region sea --size 1
-rg '^(DISCORD_BOT_TOKEN|STRATZ_API_TOKEN|DISCORD_CHANNEL_ID)=' .env | fly secrets import --app "$report_app"
+grep -E '^(DISCORD_BOT_TOKEN|STRATZ_API_TOKEN|DISCORD_CHANNEL_ID)=' .env | fly secrets import --app "$report_app"
 fly deploy --config fly.toml --ha=false
 fly status --app "$report_app"
 fly logs --app "$report_app"
@@ -133,7 +134,7 @@ Experimental menu ([fly.board.toml](fly.board.toml), `sjc`, 2GB):
 menu_app=your-unique-herald-menu       # also edit app in fly.board.toml
 fly apps create "$menu_app"
 fly volumes create herald_data --app "$menu_app" --region sjc --size 3
-rg '^(DISCORD_BOT_TOKEN|STRATZ_API_TOKEN)=' .env | fly secrets import --app "$menu_app"
+grep -E '^(DISCORD_BOT_TOKEN|STRATZ_API_TOKEN)=' .env | fly secrets import --app "$menu_app"
 fly deploy --config fly.board.toml --ha=false
 fly status --app "$menu_app"
 fly logs --app "$menu_app"
