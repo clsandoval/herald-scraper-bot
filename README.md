@@ -11,7 +11,7 @@ Scheduled reports have fixed selection and timing defaults. The menu explores si
 
 ## Start here
 
-Python 3.12+ and [uv](https://docs.astral.sh/uv/) are required for the locked setup.
+The checked-in `.python-version` selects Python 3.12, matching the tested environment and Docker image. Use [uv](https://docs.astral.sh/uv/) for the locked setup; the first sync may download dependencies.
 
 ```sh
 uv sync --frozen
