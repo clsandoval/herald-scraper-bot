@@ -1,5 +1,7 @@
 # Herald Scraper Bot — Overhaul (Herald Reviews Scout)
 
+> Historical overhaul plan. The 2026-10-04 direction preserves both scheduled reports and the experimental menu; README.md is current. The old scheduled-posting prohibition below is superseded.
+
 ## What This Is
 
 A Discord bot that helps the streamer **Jenkins** find good Dota 2 Herald-bracket

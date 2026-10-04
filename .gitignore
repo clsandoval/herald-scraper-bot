@@ -1,16 +1,32 @@
-/env.py
-test.py
-__pycache__/
+# Credentials and machine-local runtime files
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+.omo/
+scripts/prod_watch.sh
+
+# Python/tooling
 .venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+dist/
+build/
+*.egg-info/
 
-# spike scratch output (charts, post records regenerate)
-spikes/menu-v2/out/*.png
-
-# herald ingest runtime db (scripts/ingest.py)
-herald.db
-herald.db-wal
-herald.db-shm
-herald-ingest.log
-herald-backfill.log
-live_board.log
+# SQLite, logs and generated output
+*.db
+*.db-wal
+*.db-shm
+*.db.lock
+*.sqlite*
+*.receipt.json
+receipts/
+*.log
+spikes/menu-v2/out/
+.DS_Store

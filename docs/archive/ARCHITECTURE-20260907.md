@@ -1,3 +1,5 @@
+> Historical snapshot; deployment claims and filter details are outdated. See ../ARCHITECTURE.md.
+
 # Herald Architecture — Scraping Flow & System Understanding
 
 > Generated 2026-09-07 from a full-repo investigation (code, tests, `.planning/`, deploy configs).

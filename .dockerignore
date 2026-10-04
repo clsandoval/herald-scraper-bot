@@ -44,3 +44,16 @@ LICENSE
 
 # Fly.io (not needed inside the image itself)
 fly.toml
+
+# Runtime data, credentials and unrelated research never enter build context.
+.env.*
+*.db
+*.db-*
+*.sqlite*
+.omo/
+scripts/prod_watch.sh
+spikes/
+docs/
+tests/
+dist/
+build/

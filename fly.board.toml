@@ -1,22 +1,18 @@
-# Herald board + ingest — v1 SQLite stack (menu board, no chatbot).
-# Deploy: fly deploy -c fly.board.toml
-# Promote to prod channel: fly secrets set BOARD_CHANNEL=<prod channel id> -a herald-board
-
-app            = "herald-board"
+# Experimental menu + ingest share one SQLite volume on one machine.
+# Template only; no machines were started as part of the handoff.
+app = "herald-board"
 primary_region = "sjc"
-kill_signal    = "SIGTERM"
-kill_timeout   = "30s"
-
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
 [build]
-  dockerfile = "Dockerfile.board"
-
+  dockerfile = "Dockerfile"
 [env]
   HERALD_DB = "/data/herald.db"
-
+[processes]
+  board = "python -m herald.menu_service"
 [mounts]
-  source      = "herald_data"
+  source = "herald_data"
   destination = "/data"
-
 [[vm]]
-  size   = "shared-cpu-2x"  # board boot scans the full DB; 1 core starved it against ingest
-  memory = "2gb"  # 1gb OOM-killed ingest+board sharing one VM; headroom for boot + pending backlog
+  size = "shared-cpu-2x"
+  memory = "2gb"
