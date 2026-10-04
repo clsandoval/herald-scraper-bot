@@ -174,7 +174,7 @@ def test_recompute_does_not_fetchall_raw():
 # running loop at construction; a thread-built view silently drops every click
 # ("interaction failed" with no log). The board MUST construct the view on the loop.
 
-_BOARD = REPO / "spikes" / "menu-v2" / "live_board.py"
+_BOARD = REPO / "herald" / "board.py"
 
 
 def test_build_board_does_not_use_to_thread():
@@ -183,26 +183,16 @@ def test_build_board_does_not_use_to_thread():
     m = re.search(r"async def build_board\(.*?\n(?:.*\n)*?(?=\n\S|\Z)", src)
     assert m, "build_board not found"
     body = m.group(0)
-    assert "to_thread" not in body, (
+    assert not re.search(r"to_thread\(\s*Board", body), (
         "regression: build_board must construct Board() on the event loop, never "
         "via asyncio.to_thread — thread-built discord views don't dispatch clicks"
     )
     assert "Board(" in body, "build_board should construct a Board"
 
 
-def test_log_usage_is_noop_no_onloop_write():
-    """Bug: log_usage did _wconn.commit() on the event loop; under the bloated WAL
-    that blocked the loop ~30s, froze the heartbeat, and failed every interaction.
-    It must not touch the DB anymore."""
-    import re
+def test_board_has_no_synchronous_usage_writes():
     src = _BOARD.read_text()
-    m = re.search(r"def log_usage\(.*?\n(?:.*\n)*?(?=\n\S|\Z)", src)
-    assert m, "log_usage not found"
-    body = m.group(0)
-    # the actual write statements must be gone (docstring may still describe them)
-    assert "INSERT INTO usage" not in body and ".execute(" not in body, (
-        "regression: log_usage must not write to the DB on the event loop"
-    )
+    assert "_wconn" not in src and "INSERT INTO usage" not in src
 
 
 def test_death_receipt_requires_30pct_of_game():

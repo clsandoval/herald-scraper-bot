@@ -1,11 +1,12 @@
-# Herald board + ingest (v1 SQLite stack). Prod deploy: fly deploy -c fly.board.toml
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
-COPY board-requirements.txt .
-RUN pip install --no-cache-dir -r board-requirements.txt
-COPY scripts/ingest.py scripts/
-COPY spikes/menu-v2/live_board.py spikes/menu-v2/render.py spikes/menu-v2/charts.py spikes/menu-v2/
-COPY spikes/menu-v2/assets spikes/menu-v2/assets
-# board is on-demand only now (/heralds, ephemeral) — no more standing render
-# load, so ingest can co-run again.
-CMD python -u scripts/ingest.py --loop 1800 & exec python -u spikes/menu-v2/live_board.py
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+COPY herald/ ./herald/
+RUN uv sync --frozen --no-dev --no-editable
+RUN useradd --uid 1000 --create-home herald && mkdir /data && chown herald:herald /data
+USER herald
+ENV PATH="/app/.venv/bin:$PATH" HERALD_DB="/data/herald.db" HERALD_REPORT_DB="/data/herald-reports.db"
+# Pick a mode explicitly. The default only prints help and performs no I/O.
+CMD ["python", "-m", "herald", "--help"]
