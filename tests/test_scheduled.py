@@ -150,7 +150,7 @@ def test_discovery_obeys_window_boundaries_and_original_filters(monkeypatch):
         {'match_id': 2, 'start_time': 6*86400-1, 'avg_rank_tier': 15, 'duration': 5000},
     ]
     fetch = Mock(side_effect=[candidates, []])
-    monkeypatch.setattr(s.ingest, 'explorer_fetch', fetch)
+    monkeypatch.setattr(s.api, 'explorer_fetch', fetch)
     monkeypatch.setattr(s.time, 'sleep', Mock())
     assert [r['match_id'] for r in s.discover(Mock(), now)] == [5]
     query = fetch.call_args_list[0].args[1]
@@ -162,7 +162,7 @@ def test_minimal_report_stratz_request(monkeypatch):
     client = Mock()
     client.post.return_value = httpx.Response(200, json={'data': {'m0': None}},
                                              request=httpx.Request('POST', 'https://example.invalid'))
-    s.ingest.stratz_fetch_batch(client, [1], fields=s.REPORT_FIELDS)
+    s.api.stratz_fetch_batch(client, [1], fields=s.REPORT_FIELDS)
     query = client.post.call_args.kwargs['json']['query']
     assert 'seasonRank' in query and 'actionsPerMinute' in query
     assert 'abilities' not in query and 'allTalks' not in query and 'deathEvents' not in query

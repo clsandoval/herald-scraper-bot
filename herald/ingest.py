@@ -1,14 +1,7 @@
-"""Standalone Herald match ingest script.
+"""Experimental menu ingestion, SQLite schema and corpus-relative signals.
 
-PONYTAIL MODE: one file, stdlib sqlite3, sync httpx, no new dependencies, no
-dataclasses, dicts throughout. Discovers recent Herald matches on OpenDota,
-enriches them via Stratz GraphQL, stores them in a local SQLite DB with
-derived sort/filter columns + raw JSON per match, prunes old data, retries a
-pending queue, and exposes a load_matches() reader that returns the exact
-dict shape the menu-v2 board consumes.
-
-Do NOT import from functions.py/constants.py — those enforce env vars at
-import time, which would break --selfcheck (must run with no env vars set).
+Menu policy lives here; the fixed scheduled reporter never imports this module.
+Credentials are needed only for API calls, so selfchecks run offline.
 """
 
 import argparse
@@ -23,13 +16,14 @@ from collections import Counter, defaultdict
 
 import httpx
 
+from . import api
+from .api import explorer_fetch
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("ingest")
 
 # --- CONSTANTS ---
 
-EXPLORER_URL = "https://api.opendota.com/api/explorer"
-STRATZ_URL = "https://api.stratz.com/graphql"
 RAPIER_ID = 133
 # NONE = played through; DISCONNECTED = brief dc but returned (game still valid).
 # Anything else (ABANDONED, AFK, NEVER_CONNECTED*, DISCONNECTED_TOO_LONG) = abandon.
@@ -79,13 +73,12 @@ def gold_swings(leads, thresh=SWING_MIN):
     return swings
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "400"))  # safety cap on an Explorer walk
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
-# ponytail: hard ceiling on Stratz calls per UTC day (free tier = 15k/day).
-# Default leaves ~1/3 of the quota for anything else using the token.
+# Local logical-batch budget per UTC day, not a provider quota.
+# Retries can make multiple HTTP requests per recorded batch.
 STRATZ_DAILY_BUDGET = int(os.environ.get("STRATZ_DAILY_BUDGET", "10000"))
 DB_PATH = os.environ.get("HERALD_DB", "herald.db")
 
-# One aliased request fetches STRATZ_BATCH full matches and costs exactly ONE
-# rate-limit unit (verified live 2026-07-10: 25 aliases, day counter -1).
+# Batch size for rich menu detail; provider accounting can change.
 STRATZ_BATCH = int(os.environ.get("STRATZ_BATCH", "25"))
 STRATZ_FIELDS = """
     id durationSeconds startDateTime didRadiantWin gameMode rank bracket
@@ -371,34 +364,6 @@ def load_matches(conn, where="", params=(), limit=None):
 
 # --- OD EXPLORER (discovery) ---
 
-def explorer_fetch(client, sql):
-    """OpenDota Explorer SQL. Needs an explicit User-Agent (default UA gets 403)."""
-    params = {"sql": sql}
-    headers = {"User-Agent": "herald-scraper-bot"}
-    for _attempt in range(4):
-        try:
-            resp = client.get(EXPLORER_URL, params=params, headers=headers)
-        except Exception as e:
-            log.warning(f"explorer_fetch exception: {e}, retrying")
-            time.sleep(5)
-            continue
-        if resp.status_code == 429:
-            log.warning("explorer_fetch 429, sleeping 10s")
-            time.sleep(10)
-            continue
-        if resp.status_code >= 500:
-            log.warning(f"explorer_fetch {resp.status_code}, retrying")
-            time.sleep(5)
-            continue
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("err"):
-            log.warning(f"explorer_fetch sql error: {data['err']}, retrying")
-            time.sleep(5)
-            continue
-        return data.get("rows") or []
-    return None
-
 
 def discover(conn, days=RETENTION_DAYS):
     """Exhaustive discovery: keyset-paginate Explorer's public_matches (PK index
@@ -460,37 +425,8 @@ def discover(conn, days=RETENTION_DAYS):
 # --- STRATZ HTTP ---
 
 def stratz_fetch_batch(client, ids, fields=STRATZ_FIELDS, strict=False):
-    """One aliased request for up to STRATZ_BATCH matches. Returns
-    {match_id: match_or_None}, or the string "RATELIMIT" when Stratz's cap is
-    hit — callers must not count that as failed attempts."""
-    tok = os.environ.get("STRATZ_API_TOKEN")
-    if not tok:
-        raise RuntimeError("STRATZ_API_TOKEN not set")
-    headers = {"Authorization": f"Bearer {tok.strip()}", "User-Agent": "STRATZ_API"}
-    parts = [f"m{i}: match(id: {int(mid)}) {{ {fields} }}" for i, mid in enumerate(ids)]
-    body = {"query": "query { " + " ".join(parts) + " }"}
-    for _attempt in range(3):
-        try:
-            resp = client.post(STRATZ_URL, json=body, headers=headers)
-        except Exception as e:
-            log.warning(f"stratz_fetch_batch exception: {e}, retrying")
-            time.sleep(3)
-            continue
-        if resp.status_code == 429:
-            log.warning("stratz_fetch_batch 429, sleeping 30s")
-            time.sleep(30)
-            continue
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("errors"):
-            if strict:
-                raise RuntimeError("Stratz GraphQL errors; report batch incomplete")
-            log.warning(f"stratz_fetch_batch errors: {str(data['errors'])[:200]}")
-        d = data.get("data") or {}
-        if strict and any(f"m{i}" not in d for i in range(len(ids))):
-            raise RuntimeError("Stratz response omitted report matches")
-        return {mid: d.get(f"m{i}") for i, mid in enumerate(ids)}
-    return "RATELIMIT"  # 3x 429 in a row = daily/minute cap, not bad matches
+    """Menu field selection over the shared API transport."""
+    return api.stratz_fetch_batch(client, ids, fields=fields, strict=strict)
 
 
 # --- ENRICHMENT ---
@@ -535,7 +471,7 @@ def enrich(conn):
             for mid, art in chunk:
                 m = res.get(mid)
                 ready = bool(m) and bool(m.get("radiantNetworthLeads"))
-                # cut = abandons, non-Herald players, under 50 min, low kill
+                # cut = abandons, non-Herald players, under the duration floor, low kill
                 # density. duration is also pre-filtered at discovery
                 if ready and (has_abandon(m) or has_guardian(m)
                               or dur_boring(m["durationSeconds"]) or low_kpm(m)):
@@ -561,7 +497,7 @@ def enrich(conn):
                         dropped += 1
                     failed += 1
             conn.commit()
-            time.sleep(0.6)  # well under Stratz 150 req/min
+            time.sleep(0.6)  # local pacing, not a guarantee about token-wide quota
     return enriched, failed, dropped, cut
 
 

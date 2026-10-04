@@ -627,6 +627,13 @@ async def board_cmd(itx: discord.Interaction):
 @client.event
 async def on_ready():
     log.info(f"logged in as {client.user}")
+    # Packaged emoji IDs belong to historical prototypes, not a collaborator's bot.
+    render._emoji = {}
+    try:
+        emojis = await client.fetch_application_emojis()
+        render._emoji = {e.name: {"name": e.name, "id": str(e.id)} for e in emojis}
+    except (discord.HTTPException, discord.MissingApplicationID):
+        log.warning("Application emoji inventory unavailable; using text fallbacks")
     for g in client.guilds:
         tree.copy_global_to(guild=g)
         await tree.sync(guild=g)

@@ -1,10 +1,6 @@
-"""Shared render layer for the six menu mockups.
+"""Shared hero/item lookups and presentation helpers for both product modes.
 
-Loads the real fixture + current dotaconstants, precomputes a friendly
-per-match view, resolves hero/item names + CDN URLs + app emojis, provides
-the factoid ladder and the component/char budget guard.
-
-All mockup builders import from here so limits are enforced in ONE place.
+Menu receipts and fixture adapters also serve the fenced presentation prototypes.
 """
 
 import json

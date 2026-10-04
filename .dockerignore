@@ -53,7 +53,6 @@ fly.toml
 .omo/
 scripts/prod_watch.sh
 spikes/
-experiments/
 docs/
 tests/
 dist/

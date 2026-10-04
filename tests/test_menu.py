@@ -100,3 +100,22 @@ async def test_zero_scores_are_not_labeled_anomalous(db):
     db.execute('UPDATE matches SET weirdness=0, skill_weirdness=0'); db.commit()
     _, counts = await board.corpus_info()
     assert counts['weirdf'] == 0 and counts['skillf'] == 0
+
+
+@pytest.mark.parametrize('inventory_fails', [False, True])
+async def test_new_bot_does_not_use_historical_emoji_ids(db, monkeypatch, inventory_fails):
+    from herald import render
+    ingest.upsert_match(db, raw_match(), 12)
+    monkeypatch.setattr(render, '_emoji', {
+        'rank_12': {'name': 'rank_12', 'id': '123456789012345678'},
+    })
+    client = MagicMock(guilds=[])
+    client.fetch_application_emojis = AsyncMock(return_value=[])
+    if inventory_fails:
+        client.fetch_application_emojis.side_effect = board.discord.Forbidden(
+            MagicMock(status=403, reason='Forbidden'), 'Synthetic offline denial')
+    monkeypatch.setattr(board, 'client', client)
+    await board.on_ready()
+    assert board.rank_emoji(12) == ''
+    view = await board.build_board(board.default_state())
+    assert '123456789012345678' not in json.dumps(view.to_components())

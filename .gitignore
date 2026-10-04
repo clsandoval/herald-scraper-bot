@@ -25,6 +25,8 @@ build/
 *.db-shm
 *.db.lock
 *.sqlite*
+*.receipt.json
+receipts/
 *.log
 spikes/menu-v2/out/
 .DS_Store

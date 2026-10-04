@@ -17,7 +17,7 @@ import time
 
 import httpx
 
-from . import ingest, render
+from . import api, render
 
 log = logging.getLogger(__name__)
 LOOKBACK_DAYS = 1
@@ -276,7 +276,7 @@ def discover(client, now, backfill=None):
     last, found = None, {}
     for _ in range(400):
         frontier = f"AND match_id < {last} " if last else ""
-        rows = ingest.explorer_fetch(client, "SELECT match_id,start_time,avg_rank_tier,duration "
+        rows = api.explorer_fetch(client, "SELECT match_id,start_time,avg_rank_tier,duration "
             "FROM public_matches WHERE avg_rank_tier <= 16 " + frontier +
             "ORDER BY match_id DESC LIMIT 1000")
         if rows is None:
@@ -294,16 +294,16 @@ def discover(client, now, backfill=None):
 def run_once(ledger, client, token, channel, backfill=None):
     window = ledger.window(int(time.time()), backfill)
     log.info("Processing saved report window %s", report_window(window["now"], window["backfill"]))
-    api = DiscordHTTP(client, token)
-    me = api.request("GET", "/users/@me")
-    target = api.request("GET", f"/channels/{channel}")
+    discord_api = DiscordHTTP(client, token)
+    me = discord_api.request("GET", "/users/@me")
+    target = discord_api.request("GET", f"/channels/{channel}")
     if not me or not target or target.get("type") != 0:
         raise RuntimeError("Scheduled reports require a Discord guild text channel")
-    application = api.request("GET", "/oauth2/applications/@me")
-    emojis = api.request("GET", f"/applications/{application['id']}/emojis")
+    application = discord_api.request("GET", "/oauth2/applications/@me")
+    emojis = discord_api.request("GET", f"/applications/{application['id']}/emojis")
     emoji_map = {e["name"]: e["id"] for e in emojis.get("items", [])}
     for receipt in list(ledger.pending()):
-        deliver(api, ledger, receipt["spec"], channel, me["id"])
+        deliver(discord_api, ledger, receipt["spec"], channel, me["id"])
     candidates = [r for r in discover(client, window["now"], window["backfill"])
                   if not ledger.get(r["match_id"]).get("verified")
                   and not ledger.get(r["match_id"]).get("deleted")]
@@ -312,19 +312,19 @@ def run_once(ledger, client, token, channel, backfill=None):
         raise RuntimeError("Candidate count exceeds the scheduled run's Stratz budget")
     for offset in range(0, len(candidates), 25):
         chunk = candidates[offset:offset + 25]
-        matches = ingest.stratz_fetch_batch(client, [r["match_id"] for r in chunk], fields=REPORT_FIELDS, strict=True)
+        matches = api.stratz_fetch_batch(client, [r["match_id"] for r in chunk], fields=REPORT_FIELDS, strict=True)
         if matches == "RATELIMIT":
             raise RuntimeError("Stratz unavailable or rate limited; receipts preserved")
         for candidate in chunk:
             raw = matches.get(candidate["match_id"])
             if not raw:
                 continue
-            od = client.get(f"https://api.opendota.com/api/matches/{candidate['match_id']}")
+            od = client.get(f"{api.OPENDOTA_URL}/matches/{candidate['match_id']}")
             od.raise_for_status()
             od = od.json()
             if eligible(candidate, raw, od):
                 spec = payload(candidate, raw, od, emoji_map)
-                deliver(api, ledger, spec, channel, me["id"])
+                deliver(discord_api, ledger, spec, channel, me["id"])
                 log.info("Verified report for match %s", candidate["match_id"])
             time.sleep(1.1)
     ledger.finish_window()
