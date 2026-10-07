@@ -14,12 +14,14 @@ from io import BytesIO
 import importlib.util
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import sys
 import time
 from urllib.parse import urlsplit
+from email.utils import parsedate_to_datetime
 
 REPOSITORY = "clsandoval/herald-scraper-bot"
 CHANNEL = "1392724276334825584"
@@ -34,10 +36,122 @@ MAX_ICON_DOWNLOADS = 256
 MAX_ICON_BYTES = 2_000_000
 ICON_FETCH_SECONDS = 120
 SCHEMA = "herald-real-48h-20261007-v1"
+DETAIL_ATTEMPTS = 4
+MAX_RETRY_WAIT = 60
+MAX_DETAIL_RETRY_WAIT = 90
+MAX_DETAIL_HTTP_ATTEMPTS = 750
 
 
 class Stop(RuntimeError):
     """Only deliberately secret-free messages may reach stdout/stderr."""
+
+
+def safe_request_identity(method, url):
+    """Never retain query strings, headers, bodies, userinfo or arbitrary paths."""
+    parsed = urlsplit(str(url))
+    provider, path = "unknown", "[redacted]"
+    if parsed.hostname == "api.opendota.com" and (
+            parsed.path == "/api/explorer" or re.fullmatch(r"/api/matches/[0-9]+", parsed.path)):
+        provider, path = "opendota", parsed.path
+    elif parsed.hostname == "api.stratz.com" and parsed.path == "/graphql":
+        provider, path = "stratz", "/graphql"
+    elif parsed.hostname == "discord.com" and re.fullmatch(
+            r"/api/v10/(?:users/@me|oauth2/applications/@me|applications/[0-9]+/emojis|channels/[0-9]+(?:/messages(?:/[0-9]+)?|/messages/[0-9]+/threads)?)", parsed.path):
+        provider, path = "discord", parsed.path
+    return {"provider": provider, "method": method if method in {"GET", "POST"} else "OTHER", "path": path}
+
+
+class AuditedReadClient:
+    """Observe preparation calls without changing shared provider retry policy."""
+    def __init__(self, client, state, audit):
+        self.client, self.state, self.audit = client, state, audit
+
+    def _call(self, operation, method, url, **kwargs):
+        diagnostic = {**safe_request_identity(method, url), "status_code": None, "outcome": "pending"}
+        self.state["last_http"] = diagnostic
+        counts = self.state.setdefault("http_attempts", {})
+        counts[diagnostic["provider"]] = counts.get(diagnostic["provider"], 0) + 1
+        save_json(self.audit / "result.json", self.state)
+        try:
+            response = operation(url, **kwargs)
+        except Exception as exc:
+            diagnostic.update(outcome="transport_exception", exception_type=type(exc).__name__)
+            save_json(self.audit / "result.json", self.state)
+            raise
+        diagnostic.update(status_code=response.status_code, outcome="response")
+        save_json(self.audit / "result.json", self.state)
+        return response
+
+    def get(self, url, **kwargs):
+        return self._call(self.client.get, "GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._call(self.client.post, "POST", url, **kwargs)
+
+    def request(self, method, url, **kwargs):
+        return self._call(lambda target, **kw: self.client.request(method, target, **kw), method, url, **kwargs)
+
+
+def retry_delay(response, attempt, *, now=None):
+    """Honor valid seconds/HTTP-date Retry-After, never cap it to retry early."""
+    raw = response.headers.get("Retry-After")
+    if raw is not None:
+        try:
+            delay = float(raw)
+            if not math.isfinite(delay) or delay < 0:
+                raise ValueError("Invalid delay")
+            return delay
+        except (ValueError, TypeError):
+            try:
+                date = parsedate_to_datetime(raw)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=timezone.utc)
+                return max(0.0, date.timestamp() - (time.time() if now is None else now))
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return 10.0 if response.status_code == 429 else float(2 ** attempt)
+
+
+def opendota_detail(client, mid, state, audit):
+    """Only this idempotent public GET gains retries; no writes or route fallback."""
+    import httpx
+    from herald import api
+    url = f"{api.OPENDOTA_URL}/matches/{mid}"
+    waited = 0.0
+    for attempt in range(1, DETAIL_ATTEMPTS + 1):
+        if state.get("detail_http_attempts", 0) >= MAX_DETAIL_HTTP_ATTEMPTS:
+            raise Stop("OpenDota detail request budget exhausted; no posts were sent.")
+        state["detail_http_attempts"] = state.get("detail_http_attempts", 0) + 1
+        state["detail_attempt"] = attempt
+        state["stage"] = "opendota_detail"
+        state["current_match_id"] = mid
+        save_json(audit / "result.json", state)
+        try:
+            response = client.get(url, headers={"User-Agent": "herald-scraper-bot"})
+        except httpx.TransportError:
+            if attempt == DETAIL_ATTEMPTS:
+                raise Stop("OpenDota detail transport failed after four attempts; no posts were sent.") from None
+            delay = float(2 ** attempt)
+            status = None
+        else:
+            status = response.status_code
+            if status != 429 and not 500 <= status <= 599:
+                response.raise_for_status()  # Every 401/403/other 4xx stops, no alternate route.
+                return response.json()
+            if attempt == DETAIL_ATTEMPTS:
+                raise Stop(f"OpenDota detail HTTP {status} after four attempts; no posts were sent.")
+            delay = retry_delay(response, attempt)
+        if delay > MAX_RETRY_WAIT or waited + delay > MAX_DETAIL_RETRY_WAIT:
+            state["retry_stop"] = "provider_wait_exceeds_bounded_budget"
+            save_json(audit / "result.json", state)
+            raise Stop("Provider Retry-After exceeds this read-only retry budget; no posts were sent.")
+        state.setdefault("recent_retries", []).append({"provider": "opendota", "match_id": mid,
+            "status_code": status, "attempt": attempt, "delay_seconds": delay})
+        state["recent_retries"] = state["recent_retries"][-32:]
+        save_json(audit / "result.json", state)
+        time.sleep(delay)
+        waited += delay
+    raise AssertionError("Unreachable detail retry state")
 
 
 def plan():
@@ -304,20 +418,26 @@ def prepare(audit, fetch_icons=False):
         raise Stop("Preparation audit directory must be new and empty; never reset an earlier run.")
     audit.mkdir(parents=True, mode=0o700, exist_ok=True)
     state = {**plan(), "phase": "preparing", "run_id": os.environ["GITHUB_RUN_ID"],
-             "source_sha": os.environ.get("REVIEWED_SOURCE_SHA"), "counts": {}, "matches": []}
+             "source_sha": os.environ.get("REVIEWED_SOURCE_SHA"), "counts": {}, "matches": [],
+             "discovery_complete": False, "hydration_complete": False}
     save_json(audit / "result.json", state)
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if not token.strip() or not os.environ.get("STRATZ_API_TOKEN", "").strip():
         raise Stop("Required repository secret is absent; no provider crawl or Discord send occurred.")
     ledger = scheduled.Receipts(audit / "receipts.sqlite3")
     try:
-        with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
+        with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as transport:
+            client = AuditedReadClient(transport, state, audit)
             discord = scheduled.DiscordHTTP(client, token)
+            state["stage"] = "discord_identity"
             identity(discord)
+            state["stage"] = "discord_duplicate_history"
             seen, state["history"] = existing_matches(discord)
+            state["stage"] = "discord_emojis"
             app = discord.request("GET", "/oauth2/applications/@me")
             emojis = discord.request("GET", f"/applications/{app['id']}/emojis")
             emoji_map = {e["name"]: e["id"] for e in emojis.get("items", [])}
+            state["stage"] = "opendota_discovery"
             candidates = scheduled.discover(client, END, backfill=2)
             state["discovery_complete"] = True
             counts = state["counts"] = {"found": len(candidates), "existing": 0, "hydrated": 0,
@@ -333,26 +453,31 @@ def prepare(audit, fetch_icons=False):
             selected = []
             for offset in range(0, len(candidates), 25):
                 chunk = candidates[offset:offset + 25]
+                state["stage"] = "stratz_batch"
+                state["current_match_id"] = chunk[0]["match_id"]
+                state["batch_match_ids"] = [c["match_id"] for c in chunk]
+                save_json(audit / "result.json", state)
                 matches = api.stratz_fetch_batch(client, [c["match_id"] for c in chunk], scheduled.REPORT_FIELDS, strict=True)
                 if matches == "RATELIMIT":
                     raise Stop("STRATZ quota/availability blocked preparation; no posts were sent.")
                 for candidate in chunk:
                     mid = candidate["match_id"]
+                    state["current_match_id"] = mid
                     raw = matches[mid]
                     if raw is None:
                         counts["stratz_missing"] += 1
                         state["matches"].append({"match_id": mid, "status": "stratz_missing"})
+                        save_json(audit / "result.json", state)
                         continue
                     if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] != mid:
                         raise Stop("STRATZ detail does not identify the requested match; no posts were sent.")
-                    response = client.get(f"{api.OPENDOTA_URL}/matches/{mid}", headers={"User-Agent": "herald-scraper-bot"})
-                    response.raise_for_status()
-                    od = response.json()
+                    od = opendota_detail(client, mid, state, audit)
                     if not isinstance(od, dict) or od.get("error") or od.get("err"):
                         raise Stop("OpenDota match detail unavailable; no posts were sent.")
                     if type(od.get("match_id")) is not int or od["match_id"] != mid:
                         raise Stop("OpenDota detail does not identify the requested match; no posts were sent.")
                     counts["hydrated"] += 1
+                    state["stage"] = "eligibility_and_selection"
                     status = "ineligible"
                     if scheduled.eligible(candidate, raw, od):
                         counts["eligible"] += 1
@@ -363,23 +488,40 @@ def prepare(audit, fetch_icons=False):
                             status = "selected"
                     else:
                         counts["ineligible"] += 1
+                    counts["selected"] = len(selected)
+                    counts["deferred_post_cap"] = counts["eligible"] - len(selected)
+                    counts["truncated"] = counts["deferred_post_cap"] > 0
+                    state["selected_match_ids"] = [c["match_id"] for c, *_ in selected]
                     state["matches"].append({"match_id": mid, "status": status})
                     save_json(audit / "result.json", state)
                     time.sleep(1.1)
             counts["selected"] = len(selected)
             counts["deferred_post_cap"] = counts["eligible"] - len(selected)
             counts["truncated"] = counts["deferred_post_cap"] > 0
+            state["hydration_complete"] = True
+            state["stage"] = "selected_artwork"
+            state.pop("current_match_id", None)
             state["icons"] = prepare_icons(selected, scheduled, fetch_icons)
             save_json(audit / "result.json", state)
             if state["icons"].get("blocked") or state["icons"].get("fallbacks"):
                 raise Stop("Selected artwork is incomplete; exact missing IDs are in the sanitized audit. No posts were sent.")
             for candidate, raw, od, evidence in selected:
+                state["stage"] = "freeze_report_intent"
+                state["current_match_id"] = candidate["match_id"]
                 spec = scheduled.payload(candidate, raw, od, emoji_map, evidence=evidence)
                 receipt = {"match_id": candidate["match_id"], "channel": CHANNEL, "bot_id": BOT}
                 ledger.prepare(receipt, spec)
             state["phase"] = "prepared_no_discord_writes"
+            state["stage"] = "prepared"
             state["selected_match_ids"] = [c["match_id"] for c, *_ in selected]
             save_json(audit / "result.json", state)
+    except BaseException as exc:
+        state["phase"] = "prepare_failed_no_discord_writes"
+        state["error"] = {"type": type(exc).__name__, "stage": state.get("stage"),
+                          "match_id": state.get("current_match_id"),
+                          "last_http": state.get("last_http")}
+        save_json(audit / "result.json", state)
+        raise
     finally:
         try:
             # Also sanitize partial-preparation audits before the workflow's

@@ -125,6 +125,8 @@ def pipeline(monkeypatch):
         def get(self, url, **kwargs):
             mid = int(url.rsplit("/", 1)[1])
             class Response:
+                status_code = 200
+                headers = {}
                 def raise_for_status(self): pass
                 def json(self): return copy.deepcopy(fake_data[mid][2])
             return Response()
@@ -447,3 +449,130 @@ def test_exact_parent_proxy_metadata_is_safe_to_recover():
         api = live.delivery_api(client, "offline-synthetic-token", scheduled)
         api.begin_report({"parent": expected})
         assert api.find_message(live.CHANNEL, live.BOT, expected, "42:parent")["id"] == "222"
+
+
+def test_diagnostics_strip_auth_query_and_arbitrary_paths(tmp_path):
+    import httpx
+    hidden = "never-print-this-secret"
+    url = f"https://api.opendota.com/api/matches/42?key={hidden}"
+    state = {}
+    class Client:
+        def get(self, target, **kwargs):
+            return httpx.Response(403, json={"error": hidden}, headers={"X-Secret": hidden},
+                                  request=httpx.Request("GET", target, headers={"Authorization": hidden}))
+    audited = live.AuditedReadClient(Client(), state, tmp_path)
+    response = audited.get(url, headers={"Authorization": hidden})
+    assert response.status_code == 403
+    text = (tmp_path / "result.json").read_text()
+    assert hidden not in text and "?" not in text and "Authorization" not in text
+    assert state["last_http"] == {"provider": "opendota", "method": "GET", "path": "/api/matches/42",
+                                   "status_code": 403, "outcome": "response"}
+    assert live.safe_request_identity("GET", f"https://api.opendota.com/{hidden}")["path"] == "[redacted]"
+    assert live.safe_request_identity("GET", f"https://evil.example/api/matches/42?{hidden}")["provider"] == "unknown"
+
+
+def detail_responses(tmp_path, monkeypatch, responses):
+    import httpx
+    state, calls, sleeps = {}, [], []
+    monkeypatch.setattr(live.time, "sleep", sleeps.append)
+    class Client:
+        def get(self, url, **kwargs):
+            calls.append(url)
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            status, headers = item
+            return httpx.Response(status, headers=headers, json={"match_id": 42}, request=httpx.Request("GET", url))
+    return live.AuditedReadClient(Client(), state, tmp_path), state, calls, sleeps
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 418])
+def test_permanent_detail_errors_never_retry_or_switch_routes(tmp_path, monkeypatch, status):
+    import httpx
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [(status, {})])
+    with pytest.raises(httpx.HTTPStatusError):
+        live.opendota_detail(client, 42, state, tmp_path)
+    assert len(calls) == 1 and sleeps == []
+    assert state["last_http"]["status_code"] == status
+    assert state["stage"] == "opendota_detail" and state["current_match_id"] == 42
+
+
+def test_detail_429_honors_retry_after_then_recovers(tmp_path, monkeypatch):
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [(429, {"Retry-After": "3.5"}), (200, {})])
+    assert live.opendota_detail(client, 42, state, tmp_path) == {"match_id": 42}
+    assert sleeps == [3.5] and len(calls) == 2 and len(set(calls)) == 1
+    assert state["recent_retries"][0]["status_code"] == 429
+
+
+def test_detail_5xx_is_bounded_to_four_attempts(tmp_path, monkeypatch):
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [(503, {})] * 4)
+    with pytest.raises(live.Stop, match="after four attempts"):
+        live.opendota_detail(client, 42, state, tmp_path)
+    assert len(calls) == 4 and sleeps == [2, 4, 8]
+    assert state["last_http"]["status_code"] == 503
+
+
+def test_transport_retry_is_read_only_and_sanitizes_exception(tmp_path, monkeypatch):
+    import httpx
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [httpx.ReadTimeout("secret-in-exception"), (200, {})])
+    assert live.opendota_detail(client, 42, state, tmp_path) == {"match_id": 42}
+    assert len(calls) == 2 and sleeps == [2]
+    assert "secret-in-exception" not in (tmp_path / "result.json").read_text()
+
+
+def test_retry_after_http_date_and_invalid_values():
+    import httpx
+    from email.utils import format_datetime
+    from datetime import datetime, timezone
+    now = 1704067200
+    value = format_datetime(datetime.fromtimestamp(now + 20, timezone.utc), usegmt=True)
+    assert live.retry_delay(httpx.Response(429, headers={"Retry-After": value}), 1, now=now) == 20
+    for malformed in ("nan", "inf", "-1", "not-a-date"):
+        assert live.retry_delay(httpx.Response(429, headers={"Retry-After": malformed}), 1, now=now) == 10
+
+
+def test_long_retry_after_stops_instead_of_retrying_early(tmp_path, monkeypatch):
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [(429, {"Retry-After": "999"})])
+    with pytest.raises(live.Stop, match="exceeds"):
+        live.opendota_detail(client, 42, state, tmp_path)
+    assert len(calls) == 1 and sleeps == []
+    assert state["retry_stop"] == "provider_wait_exceeds_bounded_budget"
+
+
+def test_cumulative_retry_wait_has_a_bound(tmp_path, monkeypatch):
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [(429, {"Retry-After": "60"})] * 2)
+    with pytest.raises(live.Stop, match="exceeds"):
+        live.opendota_detail(client, 42, state, tmp_path)
+    assert len(calls) == 2 and sleeps == [60]
+
+
+def test_total_detail_request_budget_is_bounded(tmp_path, monkeypatch):
+    client, state, calls, sleeps = detail_responses(tmp_path, monkeypatch, [])
+    state["detail_http_attempts"] = live.MAX_DETAIL_HTTP_ATTEMPTS
+    with pytest.raises(live.Stop, match="request budget exhausted"):
+        live.opendota_detail(client, 42, state, tmp_path)
+    assert calls == [] and sleeps == []
+
+
+def test_failed_prepare_persists_exact_http_diagnostic_and_live_selection_counts(tmp_path, pipeline, monkeypatch):
+    import httpx
+    scheduled, _, _ = pipeline
+    original = live.opendota_detail
+    def fail_on_six(client, mid, state, audit):
+        if mid == 6:
+            state.update(stage="opendota_detail", current_match_id=mid, last_http={
+                "provider": "opendota", "method": "GET", "path": "/api/matches/6", "status_code": 403, "outcome": "response"})
+            raise httpx.HTTPStatusError("secret-message", request=httpx.Request("GET", "https://api.opendota.com/api/matches/6?secret=secret"), response=httpx.Response(403))
+        return original(client, mid, state, audit)
+    monkeypatch.setattr(live, "opendota_detail", fail_on_six)
+    audit = tmp_path / "audit"
+    with pytest.raises(httpx.HTTPStatusError):
+        live.prepare(audit)
+    state = json.loads((audit / "result.json").read_text())
+    assert state["phase"] == "prepare_failed_no_discord_writes" and state["hydration_complete"] is False
+    assert state["counts"]["selected"] == 5 and state["selected_match_ids"] == [1, 2, 3, 4, 5]
+    assert state["error"]["match_id"] == 6 and state["error"]["last_http"]["status_code"] == 403
+    assert "secret" not in json.dumps(state["error"])
+    with sqlite3.connect(audit / "receipts.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM deliveries").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM report_builds").fetchone()[0] == 0
