@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   clean:
-    if: ${{ github.repository == 'clsandoval/herald-scraper-bot' && github.event.created == false && github.event.deleted == false && github.event.forced == false && github.event.before == '9f04fbeace39a0e75e2c2853aee7d735c1318bad' && github.run_number == '2' && github.run_attempt == '1' }}
+    if: ${{ github.repository == 'clsandoval/herald-scraper-bot' && github.event.created == false && github.event.deleted == false && github.event.forced == false && github.event.before == '647f33cf1b093c363bf02dc086241120ac59736d' && github.run_number == '3' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
