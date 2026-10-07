@@ -109,8 +109,10 @@ async def test_full_receipts_fit_discord_text_budget(db, monkeypatch):
         p['dotaPlus'] = {'level': 30}
     ingest.upsert_match(db, raw, 12)
     notes = [{'hero_id': p['heroId'], 'score': 9,
-              'items': [['Very expensive unusual item', 50, 9]] * 3} for p in raw['players']]
-    skills = [{'hero_id': p['heroId'], 'picks': [['An unusually timed ability', 20, 9]] * 3,
+              'items': [[f'Very expensive unusual item {i}', 50+i, 9] for i in range(3)]}
+             for p in raw['players']]
+    skills = [{'hero_id': p['heroId'],
+               'picks': [[f'An unusually timed ability {i}', 20+i, 9] for i in range(3)],
                'tag': 'Unusual order'} for p in raw['players']]
     db.execute('UPDATE matches SET weirdness=9, weird_notes=?, skill_weirdness=9, skill_notes=?',
                (json.dumps(notes), json.dumps(skills))); db.commit()
@@ -121,6 +123,12 @@ async def test_full_receipts_fit_discord_text_budget(db, monkeypatch):
     content = json.dumps(view.to_components())
     assert 'Radiant' in content and 'Dire' in content
     assert 'Additional receipts omitted' in content
+    assert '**Item build receipts** · corpus-relative' in '\n'.join(
+        item.content for item in view.walk_children() if isinstance(item, board.discord.ui.TextDisplay))
+    assert '**Skill-order receipts** · corpus-relative' in '\n'.join(
+        item.content for item in view.walk_children() if isinstance(item, board.discord.ui.TextDisplay))
+    assert 'Very expensive unusual item 0' in content
+    assert 'An unusually timed ability 0' in content
     texts = [item.content for item in view.walk_children()
              if isinstance(item, board.discord.ui.TextDisplay)]
     for team in texts[1:3]:

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Herald · Offline Discord simulator</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header class="lab-bar"><div><strong>HERALD</strong><span class="lab-tag">OFFLINE LAB</span></div><p>Real bot payloads. Synthetic matches. Discord-style preview.</p><button id="inspect">Payload</button></header>
+<div class="workspace">
+<aside class="tools"><h1>Match menu simulator</h1><p class="muted">Exercise the production menu without a bot token or a live post.</p>
+<label for="scenario">Fixture scenario</label><select id="scenario"><option value="normal">12 synthetic matches</option><option value="empty">Empty archive</option><option value="missing-icons">Missing application icons</option><option value="long-text">Long names + dense receipts</option><option value="pruned">Selected match was pruned</option><option value="error">Unavailable archive</option></select>
+<div class="tool-buttons"><button id="reset">Reset board</button><button id="focus">Open rich match</button></div>
+<label class="check"><input id="narrow" type="checkbox"> Narrow viewport · 390px</label><label class="check"><input id="slow" type="checkbox"> Slow query · loading state</label>
+<button id="race">Probe overlapping Next clicks</button><button id="inject-error">Inject retryable error</button>
+<div class="rule"></div><h2>Payload checks</h2><dl><div><dt id="component-label">Components V2</dt><dd id="component-budget">—</dd></div><div><dt>Text budget</dt><dd id="text-budget">—</dd></div><div><dt>Interaction</dt><dd id="interaction-state">Ready</dd></div></dl>
+<p class="scope">The preview uses the bot’s actual components and callbacks. Discord fonts, client rendering and gateway behavior are approximated. No live Discord validation is implied.</p>
+</aside>
+<main class="stage"><div class="discord" id="discord"><header class="channel-header"><span class="hash">#</span><strong>herald-lab</strong><span class="channel-description">Private match archive</span></header>
+<section class="conversation"><div class="date-divider"><span>OFFLINE FIXTURE · OCTOBER 2026</span></div><div class="slash"><span class="user-avatar">Y</span><span><b>You</b><span class="time">Today at 12:00</span><p><span class="slash-command">/heralds</span></p></span></div>
+<article class="message"><div class="bot-avatar">H</div><div class="message-body"><div class="message-meta"><b>Herald</b><span class="app-tag">✓ APP</span><span class="time">Today at 12:00</span></div><div id="message" aria-live="polite"></div><div class="private-note">◈ Only you can see this · Simulator</div></div></article>
+</section><footer class="composer">Message #herald-lab <span>Offline preview</span></footer></div></main>
+</div>
+<dialog id="advanced"><form id="advanced-form"><h2>Advanced search</h2><div id="modal-fields"></div><p id="modal-error" role="alert"></p><div class="dialog-actions"><button type="button" id="cancel-modal">Cancel</button><button class="primary" type="submit">Submit</button></div></form></dialog>
+<dialog id="payload-dialog"><h2>Actual serialized payload</h2><p>Attachments are generated locally. V2 components and classic embeds are separate message formats.</p><pre id="payload-text"></pre><button id="close-payload">Close</button></dialog>
+<script src="/app.js"></script></body></html>
