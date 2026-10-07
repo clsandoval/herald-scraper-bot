@@ -85,6 +85,111 @@ def skill_path(player, limit=280):
     return " → ".join(f"{i}. {render.clip(name, width)}" for i, name in enumerate(names, 1))
 
 
+def _event_hook(signals):
+    """A small factual headline ladder, independent of eligibility and scores."""
+    observations = [(index, text) for index, receipts in signals["players"].items()
+                    for text in receipts]
+    # An observed purchase/death sequence beats a numerical build receipt.
+    for index, text in observations:
+        rapier = re.fullmatch(r"Divine Rapier bought \d+:\d{2}; died (\d+)s later", text)
+        if rapier:
+            return {"title": f"Rapier → dead in {rapier[1]}s", "player": index,
+                    "item": report_signals.RAPIER_ID}
+    if signals["match"]:
+        return {"title": signals["match"][0]}
+    # Check each type across the whole lobby, so player order cannot put a
+    # random-hero note ahead of a concrete buyback/death or item-use event.
+    for prefix, item in (("Buyback then died", None), ("Died attempting TP", None),
+                         ("Recorded dead time", None), ("BKB purchased", 116),
+                         ("Hand of Midas purchased", 65), ("Smoke of Deceit", 188),
+                         ("First recorded Hand of Midas", 65),
+                         ("Divine Rapier purchases", 133), ("Final inventory", None),
+                         ("First 3 non-talent picks", None)):
+        for index, text in observations:
+            if text.startswith(prefix):
+                return {"title": text, "player": index, "item": item}
+    return None
+
+
+def _build_hooks(raw, evidence):
+    """Keep supported unusual-build signals as facts, without display math."""
+    hooks = []
+    for kind in ("items", "skills"):
+        # Accept the same evidence before and after its JSON receipt roundtrip.
+        entries = {i: evidence.get(kind, {}).get(i, evidence.get(kind, {}).get(str(i), {}))
+                   for i, _ in enumerate(raw["players"])}
+        index = reporter_novelty.best_player({kind: entries}, kind)
+        if index is None:
+            continue
+        receipt = entries[index]["receipts"][0]
+        if kind == "items":
+            hooks.append({"title": f"{render.item_name(receipt['item_id'])} at {receipt['minute']}m",
+                          "player": index, "item": receipt["item_id"]})
+        else:
+            ability = report_signals.ability_name(receipt["ability_id"],
+                                                  raw["players"][index]["heroId"])
+            hooks.append({"title": f"{ability} at pick {receipt['pick']}", "player": index})
+    return hooks
+
+
+def _parent_artwork_sources():
+    path = Path(__file__).parent / "assets" / "card_icons" / "sources.json"
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def parent_embed(candidate, raw, opendota, emojis, evidence):
+    """One supported hook and enough match context to choose a replay.
+
+    Only previously cached artwork sources are used; this does not discover or
+    download artwork. Full event/build evidence stays in cards and saved data.
+    """
+    duration = candidate["duration"]
+    minutes, seconds = divmod(duration, 60)
+    short_duration = f"{minutes}m" + (f" {seconds}s" if seconds else "")
+    scores = [opendota.get("radiant_score"), opendota.get("dire_score")]
+    known_scores = all(type(value) is int and value >= 0 for value in scores)
+    summary = short_duration + (f" · {sum(scores)} kills" if known_scores else "")
+    hook = _event_hook(report_signals.summarize(raw, opendota, duration))
+    builds = [] if hook else _build_hooks(raw, evidence)
+    if builds:
+        hook = builds[0]
+    embed = {"color": 0xC8A03C, "url": f"https://stratz.com/matches/{candidate['match_id']}"}
+    if not hook:
+        if known_scores:
+            long_duration = f"{minutes} minutes" if not seconds else short_duration
+            embed.update(title=f"{sum(scores)} kills in {long_duration}",
+                         description=f"Radiant {scores[0]} · Dire {scores[1]}")
+        else:
+            embed["title"] = f"{short_duration} match"
+        return embed
+
+    embed.update(title=render.clip(hook["title"], 256), description=summary)
+    # This checked-in map records the URLs of bundled, already retrieved icons.
+    # Unknown artwork stays absent rather than manufacturing a CDN URL.
+    sources = _parent_artwork_sources()
+    if "player" in hook:
+        hero = raw["players"][hook["player"]]["heroId"]
+        embed["author"] = {"name": render.hero_name(hero)}
+        if source := sources.get(f"hero_{hero}"):
+            embed["author"]["icon_url"] = source
+        elif icon := render.application_emoji("h_" + render.hero_short(hero), emojis):
+            embed["title"] = render.clip(f"{icon} {embed['title']}", 256)
+    if item := hook.get("item"):
+        if source := sources.get(f"item_{item}"):
+            embed["thumbnail"] = {"url": source}
+        elif icon := render.application_emoji("i_" + (render.item_key(item) or ""), emojis):
+            embed["title"] = render.clip(f"{icon} {embed['title']}", 256)
+    # When builds are the only hook, retain both item and skill evidence rather
+    # than choosing between incomparable scores or dumping the full sequences.
+    if len(builds) > 1:
+        other = builds[1]
+        hero = raw["players"][other["player"]]["heroId"]
+        icon = render.application_emoji("h_" + render.hero_short(hero), emojis)
+        label = " ".join(filter(None, (icon, render.hero_name(hero))))
+        embed["description"] += "\n" + render.clip(f"{label} · {other['title']}", 180)
+    return embed
+
+
 def payload(candidate, raw, opendota, emojis, evidence=None):
     """A match overview plus two deterministic icon-first PNG team cards.
 
@@ -94,73 +199,10 @@ def payload(candidate, raw, opendota, emojis, evidence=None):
     mid = candidate["match_id"]
     date = dt.datetime.fromtimestamp(candidate["start_time"], dt.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S")
-    duration = candidate["duration"]
-    scores = [opendota.get("radiant_score"), opendota.get("dire_score")]
-    known_scores = all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                       for value in scores)
-    if known_scores:
-        kills = sum(scores)
-        density = kills / max((opendota.get("duration") or duration) / 60, 1)
-        kill_label = f"{kills} · {density:.2f}/min"
-    else:
-        kill_label = "Unavailable"
-    signals = report_signals.summarize(raw, opendota, duration)
     if evidence is None:
         evidence = reporter_novelty.unavailable(raw)
-    def hero_label(index):
-        hero = raw["players"][index]["heroId"]
-        icon = render.application_emoji("h_" + render.hero_short(hero), emojis)
-        return " ".join(filter(None, (icon, render.hero_name(hero))))
-
-    cues = []
-    # Only the strongest supported item and skill receipts belong in the
-    # overview. Full inventories, twelve-pick sequences and support details are
-    # already in the PNGs and immutable evidence; do not repeat them as text.
-    for kind in ("items", "skills"):
-        index = reporter_novelty.best_player(evidence, kind)
-        if index is None:
-            continue
-        entry = evidence[kind][index]
-        receipt = entry["receipts"][0]
-        if kind == "items":
-            item = render.named_items([receipt["item_id"]], emojis)
-            detail = f"{item} @{receipt['minute']}m · PMI {entry['score']:.1f}"
-        else:
-            hero = raw["players"][index]["heroId"]
-            ability = report_signals.ability_name(receipt["ability_id"], hero)
-            detail = f"pick {receipt['pick']}: {ability} · surprisal {entry['score']:.1f}"
-        cues.append(render.clip(f"{hero_label(index)} · {detail}", 180))
-    for cue in signals["match"]:
-        if len(cues) < 2 and cue not in cues:
-            cues.append(render.clip(cue, 180))
-    for index, receipts in signals["players"].items():
-        if len(cues) < 2 and receipts:
-            cues.append(render.clip(f"{hero_label(index)} · {receipts[0]}", 180))
-    ref = evidence["reference"]
-    scored = any(entry.get("status") == "scored"
-                 for kind in ("items", "skills") for entry in evidence.get(kind, {}).values())
-    if scored:
-        status = "Scored where supported"
-    elif ref.get("patch") is None:
-        status = "Unscored: reference unavailable"
-    elif ref.get("matches", 0) < reporter_novelty.MIN_HERO_BUILDS:
-        status = "Unscored: warming up"
-    else:
-        status = "Unscored: insufficient compatible evidence"
-    reference = (f"Experimental long-Herald · {ref.get('matches', 0):,} matches · "
-                 f"patch {ref.get('patch') or '?'} · {status}")
-    parent_fields = [
-        {"name": "⏱️ Duration", "value": f"{duration // 60}m {duration % 60}s", "inline": True},
-        {"name": "⚔️ Kills", "value": kill_label, "inline": True},
-        {"name": "🔎 Review cues", "value": "\n".join("• " + cue for cue in cues[:2]) or
-         "No standout cue recorded.", "inline": False},
-        {"name": "Reference population", "value": reference, "inline": False},
-    ]
-    parent = {"embeds": [{"title": "🏆 Herald Match Review", "description":
-        f"Match {mid} · {date} UTC\n[OpenDota](https://www.opendota.com/matches/{mid}) · Team cards in thread",
-        "color": 0xC8A03C, "url": f"https://stratz.com/matches/{mid}", "fields": parent_fields,
-        "footer": {"text": "Observed data · unscored does not mean normal"}}],
-        "allowed_mentions": {"parse": []}}
+    parent = {"embeds": [parent_embed(candidate, raw, opendota, emojis, evidence)],
+              "allowed_mentions": {"parse": []}}
     # Render once. JSON stays small and portable; the exact PNG bytes live only
     # in this transient object until the durable upload store accepts them.
     from . import card_images
@@ -176,10 +218,8 @@ def payload(candidate, raw, opendota, emojis, evidence=None):
         messages.append({
             "flags": 1 << 15,
             "components": [{"type": 17, "accent_color": color, "components": [
-                {"type": 10, "content": f"## {label} Team"},
                 {"type": 12, "items": [{"media": {"url": "attachment://" + filename},
                                          "description": manifest["description"], "spoiler": False}]},
-                {"type": 10, "content": "-# Team image · final items and first 12 observed picks · unscored ≠ normal"},
             ]}],
             "attachments": [attachment_metadata(manifest)],
             "_files": [manifest], "allowed_mentions": {"parse": []},

@@ -8,6 +8,11 @@ import pytest
 from herald import scheduled as s
 
 
+def report_gallery(message):
+    container = next(node for node in message["components"] if node["type"] == 17)
+    return next(node for node in container["components"] if node["type"] == 12)
+
+
 def fixture():
     candidate = {'match_id': 987654, 'duration': 4501, 'avg_rank_tier': 16, 'start_time': 1000}
     raw = {'players': [{'heroId': i+1, 'isRadiant': i<5, 'kills': 1, 'deaths': 1,
@@ -36,8 +41,10 @@ def test_payload_has_two_icon_team_cards_and_no_summary():
     c, raw, od = fixture()
     spec = s.payload(c, raw, od, {'h_antimage': '123'})
     assert len(spec['teams']) == 2
-    assert all(len(t['embeds'][0]['fields']) == 5 for t in spec['teams'])
-    assert '<:h_antimage:123>' in spec['teams'][0]['embeds'][0]['fields'][0]['name']
+    assert all('embeds' not in t and t['flags'] == 32768 for t in spec['teams'])
+    assert all(report_gallery(t)['items'][0]['media']['url'].startswith('attachment://') for t in spec['teams'])
+    assert spec['cards']['radiant']['players'][0]['hero_name'] == 'Anti-Mage'
+    assert set(spec.uploads) == {'radiant', 'dire'}
     assert all('content' not in m for m in [spec['parent'], *spec['teams']])
 
 
@@ -45,6 +52,7 @@ class FakeDiscord:
     def __init__(self):
         self.messages = {}; self.posts = []; self.fail_stage = None
         self.next_id = 100
+        self.files = {}
 
     def find_message(self, channel, bot_id, expected, nonce):
         return next((m for (ch, _), m in self.messages.items()
@@ -60,19 +68,34 @@ class FakeDiscord:
             obj = {'id': mid}
             self.messages[(channel, parts[4])]['thread'] = obj
         else:
-            obj = {**body, 'id': mid, 'author': {'id': 'bot'}}
+            obj = {**copy.deepcopy(body), 'id': mid, 'author': {'id': 'bot'}}
+            for attachment, (_, (filename, data, content_type)) in zip(obj.get('attachments', []), kwargs.get('files', [])):
+                url = f'https://cdn.discordapp.com/attachments/123/{mid}/{filename}?ex=signed'
+                attachment.update(id=mid, size=len(data), content_type=content_type, url=url)
+                self.files[url] = data
+                if obj.get('components'):
+                    report_gallery(obj)['items'][0]['media'] = {
+                        'url': url, 'attachment_id': mid, 'content_type': content_type}
+                else:
+                    obj['embeds'][0]['image']['url'] = url
             self.messages[(channel, mid)] = obj
         self.posts.append(path)
-        if self.fail_stage and self.fail_stage in str(body):
+        stage = 'thread' if path.endswith('/threads') else body['nonce'].split(':')[-1]
+        if self.fail_stage == stage:
             self.fail_stage = None
             raise KeyboardInterrupt('cancel after remote accepted write')
         return copy.deepcopy(obj)
 
 
+    def verify_attachments(self, actual, expected):
+        for attachment, manifest in zip(actual.get("attachments", []), expected.get("_files", [])):
+            s._check_upload(self.files[attachment["url"]], manifest)
+
+
 def test_partial_thread_resumes_without_duplicate_posts(tmp_path):
     api = FakeDiscord(); ledger = s.Receipts(tmp_path/'receipts.db')
     spec = s.payload(*fixture(), {})
-    api.fail_stage = 'RADIANT'
+    api.fail_stage = 'radiant'
     with pytest.raises(KeyboardInterrupt):
         s.deliver(api, ledger, spec, 'channel', 'bot')
     assert not ledger.get(spec['match_id']).get('verified')
@@ -87,10 +110,10 @@ def test_partial_thread_resumes_without_duplicate_posts(tmp_path):
 def test_ambiguous_send_blocks_without_blind_resend(tmp_path):
     api = FakeDiscord(); ledger = s.Receipts(tmp_path/'receipts.db')
     spec = s.payload(*fixture(), {})
-    api.fail_stage = 'RADIANT'
+    api.fail_stage = 'radiant'
     with pytest.raises(KeyboardInterrupt):
         s.deliver(api, ledger, spec, 'channel', 'bot')
-    api.messages = {k:v for k,v in api.messages.items() if 'RADIANT' not in str(v)}
+    api.messages = {k:v for k,v in api.messages.items() if not v.get('nonce', '').endswith(':radiant')}
     with pytest.raises(RuntimeError, match='Unresolved radiant'):
         s.deliver(api, ledger, spec, 'channel', 'bot')
     assert len(api.posts) == 3
@@ -211,3 +234,26 @@ def test_graphql_error_preserves_pending_window(tmp_path, monkeypatch):
         s.run_once(ledger, client, 'synthetic', 'channel')
     assert ledger.conn.execute('SELECT count(*) FROM pending_window').fetchone()[0] == 1
     assert not list(ledger.pending())
+
+
+def test_parent_is_compact_and_never_duplicates_full_build_sequences(tmp_path, synthetic_match):
+    candidate, raw, od = synthetic_match()
+    ledger = s.Receipts(tmp_path / 'reference.db')
+    ledger.novelty.begin_pass(candidate['start_time'])
+    for index in range(1, 41):
+        ledger.novelty.observe_and_score(*synthetic_match(-1000-index, reference_index=index))
+    ledger.novelty.begin_pass(candidate['start_time'])
+    evidence = ledger.novelty.observe_and_score(candidate, raw, od)
+    spec = s.payload(candidate, raw, od, {'h_antimage': '123', 'i_armlet': '456'}, evidence=evidence)
+    ledger.conn.close()
+    embed = spec['parent']['embeds'][0]
+    assert 'fields' not in embed and 'footer' not in embed
+    assert embed['title'] == 'Rapier → dead in 35s'
+    assert embed['author']['name'] == 'Juggernaut'
+    assert embed['description'] == '82m · 122 kills'
+    assert s.render.check_embeds(spec['parent']) <= 100
+    assert all('embeds' not in team and s.check_message(team) == 0 for team in spec['teams'])
+    assert len(spec['cards']['radiant']['players'][0]['skills']) == 12
+    assert spec['build_evidence']['reference']['matches'] == 40
+    assert spec['build_evidence']['items']['0']['receipts'][0]['item_id'] == 151
+    assert spec['build_evidence']['skills']['0']['receipts'][0]['pick'] == 1

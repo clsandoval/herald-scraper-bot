@@ -129,7 +129,9 @@ def build_examples(count=2, *, emojis=None):
                 card = card_images.render_team_card(model)
                 manifest = scheduled.png_manifest(card.png_bytes, card.filename, card.description)
                 if team.get("flags", 0) & (1 << 15):
-                    item = team["components"][0]["components"][1]["items"][0]
+                    container = next(node for node in team["components"] if node["type"] == 17)
+                    gallery = next(node for node in container["components"] if node["type"] == 12)
+                    item = gallery["items"][0]
                     item["media"] = {"url": "attachment://" + manifest["filename"]}
                     item["description"] = manifest["description"]
                 else:
@@ -137,43 +139,32 @@ def build_examples(count=2, *, emojis=None):
                 team["attachments"] = [scheduled.attachment_metadata(manifest)]
                 team["_files"] = [manifest]
                 spec.uploads[stage] = {manifest["filename"]: card.png_bytes}
-        label = "Cold start and missing evidence"
-        if index == 1:
-            label = "Scored build evidence" if proof is not None else "Build and event receipts"
         spec["example"] = {"fixture_set": FIXTURE_SET, "synthetic": True, "number": index}
         if "build_evidence" in spec:
             spec["build_evidence"]["reference"].update(
                 population="generated synthetic example matches", synthetic=True)
-        spec["thread_name"] = f"EXAMPLE {index} (synthetic) - {label}"
         parent = spec["parent"]["embeds"][0]
-        parent["title"] = f"🧪 EXAMPLE {index} · Synthetic Herald report"
-        parent["description"] = (
-            f"{label}. Invented match and reference data; two team images in the thread."
-        )
-        for field in parent.get("fields", []):
-            if field["name"] == "📅 Date":
-                field["value"] = "Synthetic timeline (fixed fixture)"
-            if field["name"] == "Reference population":
-                if proof is None:
-                    field["value"] = "Synthetic · did not calculate reference scores."
-                else:
-                    field["value"] = (
-                        "Synthetic · 40 generated matches · invented patch 1 · target held out."
-                        if index == 1 else
-                        "Synthetic · 0 matches. Unscored does not mean normal; missing logs stay unavailable."
-                    )
+        # Keep the actual production hook. One short label identifies the
+        # fixture; reference provenance remains available in build_evidence.
+        parent["footer"] = {"text": "Example"}
+        spec["thread_name"] = render.clip(f"Example {index} · {parent['title']}", 100)
         for team in spec["teams"]:
             if team.get("flags", 0) & (1 << 15):
-                nodes = team["components"][0]["components"]
-                nodes[0]["content"] = "## 🧪 EXAMPLE · " + nodes[0]["content"].removeprefix("## ")
-                nodes[2]["content"] = "-# SYNTHETIC EXAMPLE · generated team image · not a quality score"
+                # The image contains the team identity and one example label.
+                # New previews need no repeated header or disclaimer wrapper;
+                # existing saved receipts are never routed through this code.
+                for container in team["components"]:
+                    if container["type"] == 17:
+                        container["components"] = [node for node in container["components"]
+                                                   if node["type"] != 10]
             else:
                 team["embeds"][0]["title"] = "🧪 EXAMPLE · " + team["embeds"][0]["title"]
         for message in (spec["parent"], *spec["teams"]):
             message["allowed_mentions"] = {"parse": []}
             for embed in message.get("embeds", []):
                 embed.pop("url", None)  # No synthetic ID may point to a real match service.
-                embed["footer"] = {"text": "SYNTHETIC EXAMPLE · invented data; not a quality score"}
+                if message is not spec["parent"]:
+                    embed["footer"] = {"text": "SYNTHETIC EXAMPLE · invented data; not a quality score"}
             scheduled.check_message(message)
         specs.append(spec)
     return specs

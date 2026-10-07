@@ -14,7 +14,12 @@ CHANNEL = '123456'
 BOT = '777777'
 
 
-def tiny_spec(mid=987654):
+def report_gallery(message):
+    container = next(node for node in message["components"] if node["type"] == 17)
+    return next(node for node in container["components"] if node["type"] == 12)
+
+
+def tiny_spec(mid=987654, *, legacy_text=False):
     """A valid deterministic PNG exercises byte transport without renderer cost."""
     from io import BytesIO
     from PIL import Image
@@ -24,11 +29,13 @@ def tiny_spec(mid=987654):
     for stage in ('radiant', 'dire'):
         manifest = s.png_manifest(data.getvalue(), f'herald-{mid}-{stage}.png', f'{stage} team icon card')
         teams.append({'flags': 1 << 15, 'components': [{'type': 17, 'accent_color': 123,
-            'components': [{'type': 10, 'content': stage.upper()}, {'type': 12, 'items': [
+            'components': [{'type': 12, 'items': [
                 {'media': {'url': 'attachment://' + manifest['filename']},
                  'description': manifest['description'], 'spoiler': False}]}]}],
                       'attachments': [s.attachment_metadata(manifest)], '_files': [manifest],
                       'allowed_mentions': {'parse': []}})
+        if legacy_text:
+            teams[-1]['components'][0]['components'].insert(0, {'type': 10, 'content': stage.upper()})
         uploads[stage] = {manifest['filename']: data.getvalue()}
     return s.ReportSpec({'match_id': mid, 'parent': {'embeds': [{'title': f'Match {mid}'}]},
                          'teams': teams, 'thread_name': f'Match {mid}'}, uploads=uploads)
@@ -92,7 +99,7 @@ class DiscordService:
                                   url=url, proxy_url=url)
                 self.files[httpx.URL(url).path] = data
                 if obj.get('components'):
-                    gallery = obj['components'][0]['components'][1]
+                    gallery = report_gallery(obj)
                     gallery['items'][0]['media'] = {'url': url, 'attachment_id': attachment_id,
                         'content_type': content_type, 'width': 20, 'height': 20,
                         'proxy_url': url, 'placeholder': 'response-only'}
@@ -132,7 +139,7 @@ def test_attachment_restart_resumes_exact_original_without_duplicates(tmp_path, 
     ledger.conn.close()
     ledger = s.Receipts(path)
     new = tiny_spec()
-    new['teams'][0]['components'][0]['components'][0]['content'] = 'CHANGED AFTER UPGRADE'
+    report_gallery(new['teams'][0])['items'][0]['description'] = 'CHANGED AFTER UPGRADE'
     new.uploads = {'radiant': {'bad.png': b'never use these changed bytes'}}
     receipt = s.deliver(api, ledger, new, CHANNEL, BOT)
     assert receipt['verified'] and receipt['spec'] == frozen
@@ -228,6 +235,28 @@ def test_old_json_only_receipt_resumes_without_image_upgrade(tmp_path):
     assert ledger.conn.execute('SELECT count(*) FROM pending_uploads').fetchone()[0] == 0
 
 
+@pytest.mark.parametrize('stage', ['parent', 'thread', 'radiant', 'dire'])
+def test_saved_v2_text_wrappers_resume_unchanged_after_gallery_only_upgrade(tmp_path, stage):
+    ledger, service = s.Receipts(tmp_path / 'receipts.db'), DiscordService()
+    legacy = tiny_spec(legacy_text=True)
+    legacy['parent']['embeds'][0].update(
+        fields=[{'name': 'Reference population', 'value': 'original saved reference'}],
+        footer={'text': 'original saved footer'})
+    before = copy.deepcopy(legacy)
+    api = transport(service)
+    service.fail_stage = stage
+    with pytest.raises(KeyboardInterrupt):
+        s.deliver(api, ledger, legacy, CHANNEL, BOT)
+    receipt = s.deliver(api, ledger, tiny_spec(), CHANNEL, BOT)
+    assert receipt['verified'] and receipt['spec'] == before
+    assert len(service.posts) == 4
+    posted = next(body for part, body, _ in service.posts if part == 'radiant')
+    container = next(node for node in posted['components'] if node['type'] == 17)
+    assert any(node['type'] == 10 and node['content'] == 'RADIANT'
+               for node in container['components'])
+    ledger.conn.close()
+
+
 def test_corrupt_pending_bytes_prevent_any_image_upload(tmp_path):
     ledger, service, spec = s.Receipts(tmp_path / 'receipts.db'), DiscordService(), tiny_spec()
     api = transport(service)
@@ -291,10 +320,10 @@ def test_returned_embed_cdn_url_allows_refreshed_signature_but_not_different_att
         s.deliver(api, ledger, spec, CHANNEL, BOT)
     obj = next(m for m in service.messages.values() if m.get('nonce', '').endswith(':radiant'))
     url = obj['attachments'][0]['url']
-    obj['components'][0]['components'][1]['items'][0]['media']['url'] = url.replace('cdn.discordapp.com', 'media.discordapp.net').split('?')[0] + '?ex=older-signature&width=1000'
+    report_gallery(obj)['items'][0]['media']['url'] = url.replace('cdn.discordapp.com', 'media.discordapp.net').split('?')[0] + '?ex=older-signature&width=1000'
     assert s.same_message(obj, spec['teams'][0])
     wrong = copy.deepcopy(obj)
-    media = wrong['components'][0]['components'][1]['items'][0]['media']
+    media = report_gallery(wrong)['items'][0]['media']
     media['url'] = media['url'].replace('/1103/', '/999/')
     assert not s.same_message(wrong, spec['teams'][0])
     assert s.deliver(api, ledger, spec, CHANNEL, BOT)['verified']
@@ -330,7 +359,7 @@ def test_v2_media_only_responses_recover_without_top_level_attachments(tmp_path,
     assert all(not message.get('attachments') for message in service.messages.values())
 
 
-@pytest.mark.parametrize('change', ['flags', 'caption', 'description', 'spoiler', 'attachment_id', 'url', 'type', 'extra'])
+@pytest.mark.parametrize('change', ['flags', 'color', 'description', 'spoiler', 'attachment_id', 'url', 'type', 'extra'])
 def test_v2_component_tampering_fails_closed(tmp_path, change):
     ledger, service, spec = s.Receipts(tmp_path / 'receipts.db'), DiscordService(), tiny_spec()
     api = transport(service)
@@ -339,18 +368,20 @@ def test_v2_component_tampering_fails_closed(tmp_path, change):
     with pytest.raises(KeyboardInterrupt):
         s.deliver(api, ledger, spec, CHANNEL, BOT)
     obj = next(m for m in service.messages.values() if m.get('nonce', '').endswith(':radiant'))
-    nodes = obj['components'][0]['components']
-    item = nodes[1]['items'][0]
+    container = next(node for node in obj['components'] if node['type'] == 17)
+    nodes = container['components']
+    gallery = report_gallery(obj)
+    item = gallery['items'][0]
     if change == 'flags':
         obj['flags'] = 0
-    elif change == 'caption':
-        nodes[0]['content'] = 'wrong team'
+    elif change == 'color':
+        container['accent_color'] = 999
     elif change in ('description', 'spoiler'):
         item[change] = 'changed' if change == 'description' else True
     elif change in ('attachment_id', 'url'):
         item['media'][change] = '999' if change == 'attachment_id' else 'https://evil.invalid/image.png'
     elif change == 'type':
-        nodes[1]['type'] = 13
+        gallery['type'] = 13
     else:
         nodes.append({'type': 10, 'content': 'unsaved extra text'})
     with pytest.raises(RuntimeError, match='did not match'):
@@ -361,11 +392,11 @@ def test_v2_component_tampering_fails_closed(tmp_path, change):
 
 def test_v2_report_contract_rejects_mixed_and_unresolved_components():
     message = tiny_spec()['teams'][0]
-    assert s.check_message(message) > 0
+    assert s.check_message(message) == 0
     with pytest.raises(ValueError, match='legacy'):
         s.check_message({**message, 'embeds': []})
     bad = copy.deepcopy(message)
-    bad['components'][0]['components'][1]['items'][0]['media']['url'] = 'attachment://missing.png'
+    report_gallery(bad)['items'][0]['media']['url'] = 'attachment://missing.png'
     with pytest.raises(ValueError, match='manifest'):
         s.check_message(bad)
 
@@ -396,7 +427,7 @@ def test_v2_original_media_reference_can_use_matching_returned_cdn_metadata(tmp_
     with pytest.raises(KeyboardInterrupt):
         s.deliver(api, ledger, spec, CHANNEL, BOT)
     obj = next(m for m in service.messages.values() if m.get('nonce', '').endswith(':radiant'))
-    media = obj['components'][0]['components'][1]['items'][0]['media']
+    media = report_gallery(obj)['items'][0]['media']
     media['url'] = 'attachment://' + spec['teams'][0]['_files'][0]['filename']
     assert s.same_message(obj, spec['teams'][0])
     assert s.deliver(api, ledger, spec, CHANNEL, BOT)['verified']

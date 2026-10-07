@@ -95,7 +95,7 @@ class FakeDiscord:
                 self.files[url] = data
                 self.uploads.append((filename, data))
                 if obj.get("components"):
-                    obj["components"][0]["components"][1]["items"][0]["media"] = {
+                    report_gallery(obj)["items"][0]["media"] = {
                         "url": url, "attachment_id": attachment_id, "content_type": content_type}
                 else:
                     obj["embeds"][0]["image"]["url"] = url
@@ -106,6 +106,11 @@ class FakeDiscord:
             self.fail_stage = None
             raise KeyboardInterrupt("synthetic interruption after Discord accepted the write")
         return copy.deepcopy(obj)
+
+
+def report_gallery(message):
+    container = next(node for node in message["components"] if node["type"] == 17)
+    return next(node for node in container["components"] if node["type"] == 12)
 
 
 def test_dry_run_has_no_environment_network_or_file_dependency(tmp_path, monkeypatch, capsys):
@@ -131,11 +136,12 @@ def test_payloads_are_deterministic_production_shapes_and_clearly_synthetic(spec
     assert specs == e.build_examples()
     assert len(specs) == 2
     assert [spec["match_id"] for spec in specs] == list(e.EXAMPLE_IDS)
-    assert "https://" not in json.dumps(specs)
-    assert "http://" not in json.dumps(specs)
+    # Verified artwork URLs are allowed; synthetic identities never link to a match.
+    assert "stratz.com/matches/" not in json.dumps(specs)
+    assert "opendota.com/matches/" not in json.dumps(specs)
     for spec in specs:
         assert spec["example"]["synthetic"] is True
-        assert "synthetic" in spec["thread_name"]
+        assert spec["thread_name"].startswith("Example ")
         assert len(spec["thread_name"]) <= 100
         assert len(spec["teams"]) == 2
         parent = spec["parent"]["embeds"][0]
@@ -148,13 +154,13 @@ def test_payloads_are_deterministic_production_shapes_and_clearly_synthetic(spec
             assert message["allowed_mentions"] == {"parse": []}
             scheduled.check_message(message)
             if message.get("components"):
-                nodes = message["components"][0]["components"]
-                assert "EXAMPLE" in nodes[0]["content"]
-                assert "SYNTHETIC" in nodes[2]["content"]
+                container, = message["components"]
+                assert container["type"] == 17
+                assert container["components"] == [report_gallery(message)]
                 assert message["flags"] == 32768 and "embeds" not in message
             for embed in message.get("embeds", []):
-                assert "EXAMPLE" in embed["title"]
-                assert "SYNTHETIC" in embed["footer"]["text"]
+                assert embed["footer"]["text"] == "Example"
+                assert "example" not in embed["title"].lower()
                 assert "url" not in embed
         assert isinstance(spec, scheduled.ReportSpec)
         assert all(len(model["players"]) == 5 for model in spec["cards"].values())
@@ -166,7 +172,7 @@ def test_payloads_are_deterministic_production_shapes_and_clearly_synthetic(spec
             data = spec.uploads[stage][manifest["filename"]]
             assert data.startswith(scheduled.PNG_SIGNATURE)
             assert hashlib.sha256(data).hexdigest() == manifest["sha256"]
-            assert "Synthetic example" in manifest["description"]
+            assert manifest["description"].startswith("Example. ")
 
 
 def test_examples_call_actual_production_payload(monkeypatch):
@@ -198,7 +204,7 @@ def test_warmed_reference_is_computed_and_cold_start_is_honest(specs):
     for kind in ("items", "skills"):
         assert all(entry["score"] is None for entry in cold[kind].values())
         assert "warming up" in cold[kind]["1"]["reason"]
-    assert "Unscored does not mean normal" in json.dumps(specs[1])
+    assert "unscored" not in json.dumps(specs[1]["parent"]).lower()
 
 
 def test_unique_hero_skill_pools_and_receipts_match_displayed_inputs(specs):
@@ -221,12 +227,13 @@ def test_optional_novelty_falls_back_without_inventing_scores(monkeypatch):
         return original(candidate, raw, od, emojis)
     monkeypatch.setattr(scheduled, "payload", legacy_payload)
     result = e.build_examples(1)
-    assert "Build and event receipts" in result[0]["thread_name"]
+    assert result[0]["thread_name"] == "Example 1 · Rapier → dead in 35s"
     assert "Scored build evidence" not in json.dumps(result)
     assert "40 generated matches" not in json.dumps(result)
-    assert "did not calculate" in json.dumps(result)
+    assert result[0]["parent"]["embeds"][0]["footer"]["text"] == "Example"
+    assert result[0]["build_evidence"]["reference"]["matches"] == 0
     assert all(model["synthetic"] for model in result[0]["cards"].values())
-    assert all("Synthetic example" in team["_files"][0]["description"]
+    assert all(team["_files"][0]["description"].startswith("Example. ")
                for team in result[0]["teams"])
 
 
@@ -470,7 +477,7 @@ def test_resume_uses_original_payload_after_new_preview_changes(tmp_path, specs)
     original = ledger.get(e.EXAMPLE_IDS[0])["spec"]
     ledger.conn.close()
     changed = copy.deepcopy(specs[:1])
-    changed[0]["teams"][1]["components"][0]["components"][0]["content"] = "EXAMPLE changed since interruption"
+    report_gallery(changed[0]["teams"][1])["items"][0]["description"] = "EXAMPLE changed since interruption"
     resumed = e.ExampleReceipts(path, CHANNEL)
     try:
         result = e.send_examples(api, resumed, changed, CHANNEL)[0]
@@ -652,7 +659,7 @@ def test_changed_live_inventory_cannot_replace_saved_partial_payload(tmp_path, s
     ledger.conn.close()
     api.inventory = {"items": [{"name": "h_juggernaut", "id": "999999999999999999"}]}
     newer = e.build_examples(1)
-    newer[0]["teams"][1]["components"][0]["components"][0]["content"] = "EXAMPLE changed renderer"
+    report_gallery(newer[0]["teams"][1])["items"][0]["description"] = "EXAMPLE changed renderer"
     newer[0].uploads = {"dire": {"wrong-after-upgrade.png": b"not the saved PNG"}}
     monkeypatch.setattr(e, "build_examples", Mock(return_value=newer))
     resumed = e.ExampleReceipts(path, CHANNEL)

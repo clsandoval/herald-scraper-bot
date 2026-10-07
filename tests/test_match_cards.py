@@ -7,6 +7,11 @@ import pytest
 from herald import charts, ingest, render, scheduled
 
 
+def report_gallery(message):
+    container = next(node for node in message["components"] if node["type"] == 17)
+    return next(node for node in container["components"] if node["type"] == 12)
+
+
 def rich_match():
     candidate = {"match_id": 999001, "duration": 5100, "avg_rank_tier": 12,
                  "start_time": 1790000000}
@@ -36,18 +41,29 @@ def rich_match():
 def test_scheduled_cards_surface_items_skills_and_micro_receipts():
     spec = scheduled.payload(*rich_match(), {"h_antimage": "123", "i_black_king_bar": "456"})
     for message in [spec["parent"], *spec["teams"]]:
-        assert 0 < render.check_embeds(message) <= 6000
+        assert 0 <= scheduled.check_message(message) <= 6000
         assert message["allowed_mentions"] == {"parse": []}
-        assert "components" not in message and not message.get("flags")
-    first = spec["teams"][0]["embeds"][0]["fields"][0]
-    assert first["name"] == "<:h_antimage:123> Anti-Mage"
-    assert "<:i_black_king_bar:456> Black King Bar" in first["value"]
-    assert "**Skill picks:** 1. Mana Break" in first["value"]
-    assert "BKB" in first["value"] and "0" in first["value"]
-    assert first["value"].index("**Items:**") < first["value"].index("**KDA:**")
+    assert "components" not in spec["parent"] and not spec["parent"].get("flags")
+    first = spec["cards"]["radiant"]["players"][0]
+    assert first["hero_id"] == 1 and first["hero_name"] == "Anti-Mage"
+    assert first["items"] == [116, 65, 133, 108, 112, 1]
+    assert first["skills"] == [5003, 5004, 5003, 5004, 5003, 5006, 5003, 5004]
+    assert first["notes"] == ["BKB purchased; 0 recorded uses"]
+    assert first["kda"] == "7/12/15"
+    for stage, message in zip(("radiant", "dire"), spec["teams"]):
+        assert message["flags"] == 1 << 15
+        assert "embeds" not in message and "content" not in message
+        manifest = message["_files"][0]
+        gallery = report_gallery(message)
+        assert gallery["type"] == 12
+        assert gallery["items"][0]["media"]["url"] == "attachment://" + manifest["filename"]
+        assert spec.uploads[stage][manifest["filename"]].startswith(b"\x89PNG")
     assert "review-quality score" not in json.dumps(spec)  # no inferred numerical ranking
     parent = json.dumps(spec["parent"])
-    assert "Review cues" in parent and "Build preview" in parent and "Skill preview" in parent
+    assert "Review cues" not in parent and "Build preview" not in parent and "Skill preview" not in parent
+    assert spec["parent"]["embeds"][0]["title"] == "Radiant won after trailing by 9,000 gold"
+    assert spec["parent"]["embeds"][0]["description"] == "85m · 72 kills"
+    assert render.check_embeds(spec["parent"]) <= 900
 
 
 def test_missing_build_logs_are_not_reported_as_zero():
@@ -56,10 +72,10 @@ def test_missing_build_logs_are_not_reported_as_zero():
         for field in ["abilities", "stats", *(f"item{i}Id" for i in range(6))]:
             p.pop(field, None)
     spec = scheduled.payload(candidate, raw, od, {})
-    text = spec["teams"][0]["embeds"][0]["fields"][0]["value"]
-    assert "**Items:** Unavailable" in text
-    assert "**Skill picks:** Unavailable" in text
-    assert "**Review:**" not in text
+    first = spec["cards"]["radiant"]["players"][0]
+    assert first["items"] == [None] * 6
+    assert first["skills"] is None
+    assert first["notes"] == []
 
 
 def test_recorded_empty_inventory_and_skills_are_distinct_from_missing():
@@ -68,9 +84,9 @@ def test_recorded_empty_inventory_and_skills_are_distinct_from_missing():
         p.update({f"item{i}Id": 0 for i in range(6)})
         p["abilities"] = []
     spec = scheduled.payload(candidate, raw, od, {})
-    text = spec["teams"][0]["embeds"][0]["fields"][0]["value"]
-    assert "No final-slot items recorded" in text
-    assert "No non-talent picks recorded" in text
+    first = spec["cards"]["radiant"]["players"][0]
+    assert first["items"] == [0] * 6
+    assert first["skills"] == []
 
 
 def test_missing_score_and_nullable_apm_remain_unavailable():
@@ -78,9 +94,11 @@ def test_missing_score_and_nullable_apm_remain_unavailable():
     od.pop("radiant_score")
     raw["players"][0]["stats"]["actionsPerMinute"] = [None, float("nan"), -1]
     spec = scheduled.payload(candidate, raw, od, {})
-    fields = spec["parent"]["embeds"][0]["fields"]
-    assert next(field for field in fields if field["name"] == "⚔️ Kills")["value"] == "Unavailable"
-    assert "APM N/A" in spec["teams"][0]["embeds"][0]["fields"][0]["value"]
+    parent = spec["parent"]["embeds"][0]
+    assert "fields" not in parent and parent["description"] == "85m"
+    assert "kills" not in json.dumps(parent)
+    assert spec["cards"]["radiant"]["kills"] is None
+    assert "APM" not in json.dumps(spec["cards"])  # Secondary statistics no longer crowd the icons.
 
 
 def test_longest_real_inventory_names_and_skills_fit_without_cutting_items(monkeypatch):
@@ -90,11 +108,13 @@ def test_longest_real_inventory_names_and_skills_fit_without_cutting_items(monke
         p.update({f"item{i}Id": item for i, item in enumerate(longest)})
     spec = scheduled.payload(candidate, raw, od, {})
     for message in spec["teams"]:
-        assert render.check_embeds(message) <= 6000
-        for field in message["embeds"][0]["fields"]:
-            assert all(render.item_name(item) in field["value"] for item in longest)
-            assert "**Skill picks:**" in field["value"]
-            assert len(field["value"]) <= 1024
+        assert scheduled.check_message(message) <= 4000
+        assert "embeds" not in message
+        assert len(message["attachments"][0]["description"]) <= 1024
+    for card in spec["cards"].values():
+        for player in card["players"]:
+            assert player["items"] == longest  # Icons retain all slots regardless of label length.
+            assert len(player["skills"]) == 8
 
 
 def test_preview_has_build_evidence_and_no_per_hero_kda_wall(monkeypatch):
@@ -141,8 +161,8 @@ def test_nullable_kda_renders_unknown_without_inventing_zero(monkeypatch):
     candidate, raw, od = rich_match()
     raw["players"][0].pop("kills")
     raw["players"][0]["assists"] = None
-    text = scheduled.payload(candidate, raw, od, {})["teams"][0]["embeds"][0]["fields"][0]["value"]
-    assert "**KDA:** ?/12/?" in text
+    player = scheduled.payload(candidate, raw, od, {})["cards"]["radiant"]["players"][0]
+    assert player["kda"] == "?/12/?"
 
 
 def test_invalid_optional_inventory_ids_and_badges_are_display_safe():

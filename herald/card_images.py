@@ -12,6 +12,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import textwrap
 import importlib.util
 
@@ -53,8 +54,8 @@ def _short(text, limit=94):
 def build_team_card(candidate, raw, opendota, *, radiant, evidence=None, synthetic=False):
     """Create an immutable-ready, JSON-serializable presentation model.
 
-    Full evidence remains in the delivery spec. Cards show at most two selected
-    receipts per hero, never ten repeated PMI/surprisal paragraphs.
+    Full evidence remains in the delivery spec. Cards show at most two factual
+    observations per hero, with no scoring or reference metadata on the image.
     """
     if type(radiant) is not bool:
         raise ValueError("radiant must be a boolean")
@@ -94,16 +95,15 @@ def build_team_card(candidate, raw, opendota, *, radiant, evidence=None, synthet
             if best[kind] != index or not entry.get("receipts"):
                 continue
             receipt = entry["receipts"][0]
-            support = entry.get("support", {})
             if kind == "items":
                 item = receipt["item_id"]
                 item_marks.append(item)
-                note = f"{render.item_name(item)} @{receipt['minute']}m · PMI {entry['score']:.1f} · n={support.get('hero_builds', '?')}"
+                note = f"{render.item_name(item)} @{receipt['minute']}m"
             else:
                 pick = receipt["pick"]
                 # Original observed pick is used verbatim. Never compress gaps.
                 skill_marks.append(pick)
-                note = f"Pick {pick}: {report_signals.ability_name(receipt['ability_id'], hero)} · surprisal {receipt['score']:.1f} · n={support.get('hero_mode_builds', '?')}"
+                note = f"Pick {pick}: {report_signals.ability_name(receipt['ability_id'], hero)}"
             # The text budget must not hide the selected item or skill tile.
             # An event plus an item note can consume both lines for one hero.
             if len(notes) < 2:
@@ -192,14 +192,20 @@ def _icon(canvas, draw, kind, identifier, box, *, highlight=False):
     _text(draw, (x+(w-tw)//2, y+(h-size)//2-2), label, size, MUTED)
 
 
+def _display_notes(player):
+    """Read old saved annotations without changing their model or frozen bytes."""
+    return [re.split(r"\s+·\s+(?:PMI|surprisal)\b", note, maxsplit=1,
+                     flags=re.IGNORECASE)[0] for note in player["notes"][:2]]
+
+
 def card_description(card):
     """Concise attachment alt text; detailed evidence remains in the saved spec."""
-    lines = [f"{'Synthetic example. ' if card['synthetic'] else ''}{card['team'].title()} team. "
+    lines = [f"{'Example. ' if card['synthetic'] else ''}{card['team'].title()} team. "
              "Each row: hero portrait, six final item slots, twelve numbered non-talent picks."]
     for p in card["players"]:
         items = ", ".join(render.item_name(i) if i else "empty" if i == 0 else "unknown"
                           for i in p["items"])
-        lines.append(f"{p['hero_name']} {p['kda']}: {items}. " + "; ".join(p["notes"]))
+        lines.append(f"{p['hero_name']} {p['kda']}: {items}. " + "; ".join(_display_notes(p)))
     return _short("\n".join(lines), 1024)
 
 
@@ -213,12 +219,12 @@ def render_team_card(card):
     color = "#6bdd99" if card["team"] == "radiant" else "#ee8084"
     draw.rectangle((0, 0, WIDTH, 7), fill=color)
     _text(draw, (28, 23), card["team"].upper(), 36, color, True)
-    badge = "SYNTHETIC EXAMPLE" if card["synthetic"] else f"MATCH {card['match_id']}"
+    badge = "Example" if card["synthetic"] else f"MATCH {card['match_id']}"
     bounds = draw.textbbox((0, 0), badge, font=_font(18, True))
     _text(draw, (WIDTH-28-(bounds[2]-bounds[0]), 37), badge, 18, MUTED, True)
     _text(draw, (29, 73), f"{render.dur(card['duration'])}   ·   " +
           (f"{card['kills']} team kills" if card['kills'] is not None else "Kills unavailable"), 22)
-    _text(draw, (218, 117), "FINAL INVENTORY  /  FIRST 12 NON-TALENT PICKS", 16, MUTED, True)
+    _text(draw, (218, 117), "ITEMS  /  FIRST 12 SKILL PICKS", 16, MUTED, True)
     for index, player in enumerate(card["players"]):
         top = 152 + index * ROW_HEIGHT
         draw.rounded_rectangle((18, top, WIDTH-18, top+ROW_HEIGHT-10), radius=10, fill=PANEL)
@@ -239,15 +245,15 @@ def render_team_card(card):
             _icon(canvas, draw, "ability", ability, (x, top+80, 52, 52),
                   highlight=pick+1 in player["skill_marks"])
             _text(draw, (x+19 if pick < 9 else x+15, top+134), pick+1, 13, MUTED)
-        notes = player["notes"][:2]
+        notes = _display_notes(player)
         positions = list(range(len(notes)))
-        if notes and " · " not in notes[0] and (len(notes[0]) > 58 or len(notes) > 1):
-            # Long event receipts need the full-width line; if a statistical
-            # receipt also exists it can use the small inventory-side space.
+        build_note = bool(notes and (notes[0].startswith("Pick ") or " @" in notes[0]))
+        if notes and not build_note and (len(notes[0]) > 58 or len(notes) > 1):
+            # Long events need the full-width line; item/skill facts can use
+            # the small inventory-side space without moving any icon tiles.
             positions = [1, 0][:len(notes)]
         for line, note in zip(positions, notes):
             if line == 0:
-                _text(draw, (736, top+17), "RECEIPT", 12, GOLD, True)
                 words = note.split(" · ")
                 if len(words) == 1:
                     words = textwrap.wrap(note, width=29, break_long_words=False)
@@ -261,13 +267,6 @@ def render_team_card(card):
                 while size > 11 and draw.textlength(note, font=_font(size)) > 732:
                     size -= 1
                 _text(draw, (218, top+154), note, size, GOLD)
-        if not player["notes"] and any(v != "scored" for v in player["evidence_status"].values()):
-            _text(draw, (218, top+154), "Build evidence unscored", 13, MUTED)
-    footer = 152 + ROW_HEIGHT * 5
-    ref = card["reference"]
-    synthetic = "Synthetic reference" if card["synthetic"] else "Long-Herald reference"
-    _text(draw, (28, footer+5), f"{synthetic} · {ref['matches']} matches · patch {ref.get('patch') or '?'}", 16, MUTED)
-    _text(draw, (28, footer+31), "Amber = selected receipt, not a quality score.  – empty / no recorded pick   ? unavailable", 15, MUTED)
     out = BytesIO()
     canvas.save(out, format="PNG", optimize=False)
     data = out.getvalue()

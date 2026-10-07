@@ -489,6 +489,7 @@ dependencies = [
     { name = "discord-py" },
     { name = "httpx" },
     { name = "matplotlib" },
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -502,6 +503,7 @@ requires-dist = [
     { name = "discord-py", specifier = ">=2.7,<3" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "matplotlib", specifier = ">=3.9,<4" },
+    { name = "pillow", specifier = ">=11,<13" },
 ]
 
 [package.metadata.requires-dev]

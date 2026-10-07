@@ -3,7 +3,7 @@ name = "herald-scraper-bot"
 version = "0.1.0"
 description = "Herald match reports and an experimental private match menu"
 requires-python = ">=3.12"
-dependencies = ["discord.py>=2.7,<3", "httpx>=0.27,<1", "matplotlib>=3.9,<4"]
+dependencies = ["discord.py>=2.7,<3", "httpx>=0.27,<1", "matplotlib>=3.9,<4", "pillow>=11,<13"]
 
 [build-system]
 requires = ["hatchling"]

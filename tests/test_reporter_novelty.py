@@ -14,6 +14,11 @@ MODE = "ALL_PICK_RANKED"
 SKILLS = [5003, 5004, 5003, 5004, 5003, 5006, 5003, 5004, 5005, 5005, 5005, 5006]
 
 
+def report_gallery(message):
+    container = next(node for node in message["components"] if node["type"] == 17)
+    return next(node for node in container["components"] if node["type"] == 12)
+
+
 def match(mid=1, *, patch=PATCH, mode=MODE):
     c = {"match_id": mid, "start_time": NOW - 1000 + mid, "duration": 4800, "avg_rank_tier": 15}
     players = [{"heroId": i + 1, "isRadiant": i < 5,
@@ -180,29 +185,38 @@ def test_frozen_reference_survives_eviction_and_late_patch_fits(store, monkeypat
         assert result["reference"]["matches"] == 1
 
 
-def test_parent_previews_choose_evidence_players_and_keep_all_twelve_ordinals(store):
+def test_compact_parent_chooses_evidence_and_png_keeps_all_twelve_ordinals(store):
     warm(store)
     c, raw, od = match(99)
     raw["players"][5]["stats"]["itemPurchases"][0]["itemId"] = 116
     raw["players"][7]["abilities"][11]["abilityId"] = 5003
     result = store.observe_and_score(c, raw, od)
     spec = scheduled.payload(c, raw, od, {}, evidence=result)
-    fields = spec["parent"]["embeds"][0]["fields"]
-    build = next(f["value"] for f in fields if f["name"] == "🎒 Build preview")
-    skills = next(f["value"] for f in fields if f["name"] == "🧩 Skill preview")
-    assert render.hero_name(raw["players"][5]["heroId"]) in build
-    assert render.hero_name(raw["players"][7]["heroId"]) in skills
-    assert "12." in skills and "pick 12" in skills
-    assert "PMI" in build and "Surprisal" in skills
-    assert "long-Herald" in json.dumps(spec["parent"])
+    parent = spec["parent"]["embeds"][0]
+    cues = json.dumps(parent)
+    assert "fields" not in parent
+    assert render.hero_name(raw["players"][5]["heroId"]) in cues
+    assert render.hero_name(raw["players"][7]["heroId"]) in cues
+    assert "pick 12" in cues and "12." not in cues
+    assert "PMI" not in cues and "surprisal" not in cues
+    assert "Black King Bar at 16m" in cues
+    assert render.check_embeds(spec["parent"]) <= 900
+    assert "long-Herald" not in json.dumps(spec["parent"])
     assert spec == json.loads(json.dumps(spec))
     for message in [spec["parent"], *spec["teams"]]:
-        render.check_embeds(message)
+        scheduled.check_message(message)
     for team in spec["teams"]:
-        for field in team["embeds"][0]["fields"]:
-            assert "**Item evidence:**" in field["value"]
-            assert "**Skill evidence:**" in field["value"]
-            assert "12." in field["value"] and "**KDA:**" in field["value"]
+        assert "embeds" not in team and team["flags"] == 32768
+        assert report_gallery(team)["items"][0]["media"]["url"].startswith("attachment://")
+    for card in spec["cards"].values():
+        for player in card["players"]:
+            assert len(player["items"]) == 6
+            assert len(player["skills"]) == 12
+            assert len(player["notes"]) <= 2
+    selected = spec["cards"]["dire"]["players"][2]
+    assert selected["skills"][11] == 5003
+    assert selected["skill_marks"] == [12]
+    assert any("Pick 12:" in note for note in selected["notes"])
 
 
 def test_novelty_uses_existing_requests_and_never_changes_eligibility(tmp_path, monkeypatch):
