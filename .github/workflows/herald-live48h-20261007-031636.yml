@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REVIEWED_SOURCE_SHA: 18640ea5e3afab3fc2c31783589b73204feb67f0
-  REVIEWED_RUNNER_SHA256: 9b3572aa0bf3ee362fd633641d68e0b445916c101681532b1e0a5fc759e530ab
+  REVIEWED_SOURCE_SHA: 6c47bf0ec40ad7c09e18db8e7ae3f8a749288ca3
+  REVIEWED_RUNNER_SHA256: 59301fca9b3930c39881c55fd2a7208c263975f73fd599fce7f6bfd0e37357b2
   MPLBACKEND: Agg
   PYTHONUNBUFFERED: '1'
 
@@ -27,8 +27,8 @@ jobs:
           github.event.created == false &&
           github.event.deleted == false &&
           github.event.forced == false &&
-          github.event.before == 'ef517f6ef8383ae5436c98b7f140928d5e38edc1' &&
-          github.run_number == '2' && github.run_attempt == '1' }}
+          github.event.before == '40962cc91a159a8a6b5fd542df8f9a1c7c27118c' &&
+          github.run_number == '3' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$GITHUB_RUN_NUMBER" = 2
+          test "$GITHUB_RUN_NUMBER" = 3
           test "${RUNNER_DEBUG:-}" != 1
           python3 - <<'PY'
           import json, os, re
@@ -51,7 +51,7 @@ jobs:
           assert os.environ['GITHUB_REF'] == 'refs/heads/test/herald-live48h-20261007-031636'
           event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
           assert event.get('created') is False and event.get('deleted') is False
-          assert event.get('forced') is False and event.get('before') == 'ef517f6ef8383ae5436c98b7f140928d5e38edc1'
+          assert event.get('forced') is False and event.get('before') == '40962cc91a159a8a6b5fd542df8f9a1c7c27118c'
           PY
 
       - name: Check out reviewed immutable source
@@ -84,7 +84,7 @@ jobs:
             tests/test_live_48h.py tests/test_api_failures.py \
             tests/test_scheduled.py tests/test_scheduled_attachments.py \
             tests/test_examples.py tests/test_card_images.py tests/test_match_cards.py \
-            tests/test_parent_display.py tests/test_reporter_novelty.py tests/test_report_signals.py
+            tests/test_parent_display.py tests/test_reporter_novelty.py tests/test_report_signals.py tests/test_cache_card_icons.py
 
       - name: Discover and freeze at most five real reports without sending
         timeout-minutes: 30
@@ -97,7 +97,8 @@ jobs:
           umask 077
           export PYTHONPATH="$GITHUB_WORKSPACE"
           .venv/bin/python scripts/live_48h_20261007.py prepare \
-            --audit-dir "$RUNNER_TEMP/herald-live48h-audit" --fetch-selected-icons
+            --audit-dir "$RUNNER_TEMP/herald-live48h-audit" --fetch-selected-icons \
+            --completed-scan-seed scripts/completed-scan-seed-20261007.json
           # Selected real report artwork only; never call the bulk
           # cache_card_icons.py --fetch maintenance command.
 

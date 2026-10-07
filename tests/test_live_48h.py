@@ -576,3 +576,155 @@ def test_failed_prepare_persists_exact_http_diagnostic_and_live_selection_counts
     with sqlite3.connect(audit / "receipts.sqlite3") as db:
         assert db.execute("SELECT count(*) FROM deliveries").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM report_builds").fetchone()[0] == 0
+
+
+def seed_path():
+    adjacent = Path(__file__).with_name("completed-scan-seed.json")
+    return adjacent if adjacent.is_file() else Path(__file__).resolve().parents[1] / "scripts/completed-scan-seed-20261007.json"
+
+
+def test_completed_seed_is_exact_and_preserves_full_scan_provenance(tmp_path):
+    seed = live.load_completed_seed(seed_path())
+    assert seed["selected_match_ids"] == list(live.SELECTED_IDS)
+    assert seed["counts"]["found"] == 136 and seed["counts"]["eligible"] == 27
+    changed = tmp_path / "seed.json"
+    changed.write_text(seed_path().read_text() + " ")
+    with pytest.raises(live.Stop, match="exact reviewed"):
+        live.load_completed_seed(changed)
+
+
+def seeded_pipeline(pipeline, monkeypatch):
+    from herald import api
+    scheduled, candidates, data = pipeline
+    exemplar = copy.deepcopy(data[1])
+    data.clear()
+    candidates.clear()
+    for index, mid in enumerate(live.SELECTED_IDS):
+        c, raw, od = copy.deepcopy(exemplar)
+        c.update(match_id=mid, start_time=live.START + index + 1)
+        raw["id"] = od["match_id"] = mid
+        data[mid] = (c, raw, od)
+        candidates.append(c)
+    queries = []
+    def explorer(client, sql):
+        queries.append(sql)
+        return copy.deepcopy(candidates)
+    monkeypatch.setattr(api, "explorer_fetch", explorer)
+    monkeypatch.setattr(scheduled, "discover", lambda *a, **kw: pytest.fail("Seed mode must not repeat the full survey"))
+    return scheduled, candidates, data, queries
+
+
+def test_seeded_prepare_rechecks_only_five_and_keeps_previous_counts_distinct(tmp_path, pipeline, monkeypatch):
+    _, _, _, queries = seeded_pipeline(pipeline, monkeypatch)
+    audit = tmp_path / "audit"
+    live.prepare(audit, completed_seed=seed_path())
+    state = json.loads((audit / "result.json").read_text())
+    assert len(queries) == 1 and "match_id IN (" in queries[0]
+    assert all(str(mid) in queries[0] for mid in live.SELECTED_IDS)
+    assert state["counts_scope"] == "selected_match_revalidation"
+    assert state["counts"]["found"] == state["counts"]["hydrated"] == state["counts"]["eligible"] == 5
+    assert state["prior_scan_counts"]["found"] == 136 and state["prior_scan_counts"]["eligible"] == 27
+    assert state["prior_scan_counts"]["deferred_post_cap"] == 22
+    assert state["selected_match_ids"] == list(live.SELECTED_IDS)
+    assert state["discovery_complete"] is False and state["selected_lookup_complete"] is True
+    assert state["hydration_complete"] is True and state["counts"]["posted"] == 0
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "out_of_window", "too_short", "wrong_id"])
+def test_seeded_discovery_change_stops_without_substitutes(tmp_path, pipeline, monkeypatch, change):
+    _, candidates, _, _ = seeded_pipeline(pipeline, monkeypatch)
+    if change == "missing": candidates.pop()
+    elif change == "duplicate": candidates[-1] = copy.deepcopy(candidates[0])
+    elif change == "out_of_window": candidates[0]["start_time"] = live.START - 1
+    elif change == "too_short": candidates[0]["duration"] = 4500
+    else: candidates[0]["match_id"] = 123
+    with pytest.raises(live.Stop, match="no substitution"):
+        live.prepare(tmp_path / "audit", completed_seed=seed_path())
+
+
+def test_seeded_provider_requalification_failure_stops_without_substitutes(tmp_path, pipeline, monkeypatch):
+    _, _, data, _ = seeded_pipeline(pipeline, monkeypatch)
+    data[live.SELECTED_IDS[1]][1]["players"][0]["steamAccount"]["seasonRank"] = 30
+    with pytest.raises(live.Stop, match="no longer qualifies"):
+        live.prepare(tmp_path / "audit", completed_seed=seed_path())
+    state = json.loads((tmp_path / "audit/result.json").read_text())
+    assert state["counts"]["hydrated"] == 2 and state["counts"]["selected"] == 1
+    assert state["phase"] == "prepare_failed_no_discord_writes"
+    with sqlite3.connect(tmp_path / "audit/receipts.sqlite3") as db:
+        assert db.execute("SELECT count(*) FROM deliveries").fetchone()[0] == 0
+
+
+def test_seeded_existing_post_blocks_before_provider_calls(tmp_path, pipeline, monkeypatch):
+    _, _, _, queries = seeded_pipeline(pipeline, monkeypatch)
+    monkeypatch.setattr(live, "existing_matches", lambda api: ({live.SELECTED_IDS[0]}, {"complete": True}))
+    with pytest.raises(live.Stop, match="already posted"):
+        live.prepare(tmp_path / "audit", completed_seed=seed_path())
+    assert queries == []
+
+
+def test_selected_cache_preserves_only_valid_selected_public_pngs(tmp_path, monkeypatch):
+    from PIL import Image
+    from herald import card_images, scheduled
+    assets, audit = tmp_path / "assets", tmp_path / "audit"
+    assets.mkdir(); audit.mkdir()
+    monkeypatch.setattr(card_images, "ASSET_DIR", assets)
+    Image.new("RGB", (12, 10)).save(assets / "hero_1.png")
+    Image.new("RGB", (12, 10)).save(assets / "hero_2.png")
+    (assets / "item_133.png").write_bytes(b"invalid")
+    icons = {"keys": ["hero_1", "item_133", "ability_999999"]}
+    live.preserve_icon_cache(audit, icons, scheduled)
+    saved = json.loads((audit / "selected-icons/manifest.json").read_text())
+    assert set(saved) == {"hero_1"}
+    assert (audit / "selected-icons/hero_1.png").read_bytes() == (assets / "hero_1.png").read_bytes()
+    assert icons["preserved_cache"]["count"] == 1
+
+
+def test_runner_art_download_accepts_bounded_large_metadata_and_strips_it(tmp_path, monkeypatch):
+    import httpx
+    from io import BytesIO
+    from PIL import Image, PngImagePlugin
+    from herald import scheduled, card_images
+    metadata = PngImagePlugin.PngInfo(); metadata.add_itxt("Test", "x" * 2_010_000)
+    buf = BytesIO(); Image.new("RGB", (88, 64)).save(buf, format="PNG", pnginfo=metadata)
+    data = buf.getvalue()
+    assert 2_000_000 < len(data) < live.MAX_ICON_BYTES
+    monkeypatch.setattr(card_images, "ASSET_DIR", tmp_path)
+    monkeypatch.setattr(live, "selected_icon_keys", lambda *args: {"item_1097"})
+    class Response:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def iter_bytes(self): yield data
+    class Client:
+        def __init__(self, **kwargs): assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def stream(self, method, url):
+            assert method == "GET" and url.endswith("/items/disperser.png")
+            return Response()
+    monkeypatch.setattr(httpx, "Client", Client)
+    result = live.prepare_icons([], scheduled, True)
+    assert result["fallbacks"] == [] and result["downloaded"] == ["item_1097"]
+    assert (tmp_path / "item_1097.png").stat().st_size < 10_000
+
+
+def test_runner_art_status_failures_are_sanitized(tmp_path, monkeypatch):
+    import httpx
+    from herald import scheduled, card_images
+    monkeypatch.setattr(card_images, "ASSET_DIR", tmp_path)
+    monkeypatch.setattr(live, "selected_icon_keys", lambda *args: {"item_1097", "ability_999999"})
+    class Response:
+        status_code = 503
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    class Client:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def stream(self, method, url): return Response()
+    monkeypatch.setattr(httpx, "Client", Client)
+    result = live.prepare_icons([], scheduled, True)
+    assert result["failure_count"] == 2
+    assert {row["reason"] for row in result["failures"]} == {"catalog_missing", "http_status"}
+    assert next(row for row in result["failures"] if row["key"] == "item_1097")["status_code"] == 503
+    assert all("url" not in row and "body" not in row and "headers" not in row for row in result["failures"])

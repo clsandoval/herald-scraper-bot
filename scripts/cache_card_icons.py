@@ -20,13 +20,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from herald import render, report_signals
 
 ROOT = Path(__file__).resolve().parents[1] / 'herald' / 'assets' / 'card_icons'
+# Some official 88px item PNGs contain ~2 MB of ancillary metadata. Keep a
+# bounded input allowance while validating dimensions and re-encoding pixels.
+MAX_DOWNLOAD_BYTES = 4 * 1024 * 1024
 
 
 def sources():
     out = {f'hero_{int(hid)}': render.hero_img(int(hid)) for hid in render._heroes}
     out.update({f'item_{iid}': render.item_img(iid) for iid in render._item_by_id
-                if render.item_img(iid) and not render.item_key(iid).startswith('recipe_')})
+                if render.item_img(iid)})
     heroes = {render.hero_short(int(hid)) for hid in render._heroes}
+    # Valve's ability prefix differs from this hero's portrait/catalog key.
+    if 'sand_king' in heroes:
+        heroes.add('sandking')
     out.update({f'ability_{aid}': f'{render.CDN}/apps/dota2/images/dota_react/abilities/{name}.png'
                 for aid, name in report_signals._ABILITY_NAMES.items()
                 if any(name.startswith(h + '_') for h in heroes)})
@@ -44,9 +50,10 @@ def fetch(key, url):
         except (OSError, ValueError):
             pass  # Replace a corrupt cached file only after successful validation.
     process = subprocess.run(['curl', '--fail', '--silent', '--show-error',
-                              '--proto', '=https', '--max-time', '20', url],
+                              '--proto', '=https', '--max-time', '20',
+                              '--max-filesize', str(MAX_DOWNLOAD_BYTES), url],
                              capture_output=True)
-    if process.returncode or len(process.stdout) > 2_000_000:
+    if process.returncode or len(process.stdout) > MAX_DOWNLOAD_BYTES:
         return key, url, False
     try:
         with Image.open(BytesIO(process.stdout)) as source:

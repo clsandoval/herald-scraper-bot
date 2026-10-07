@@ -1,0 +1,36 @@
+{
+  "schema": "herald-real-48h-20261007-v1",
+  "repository": "clsandoval/herald-scraper-bot",
+  "guild": "1392724275538038826",
+  "channel": "1392724276334825584",
+  "bot": "1393107291741618359",
+  "start_inclusive": 1791170196,
+  "end_exclusive": 1791342996,
+  "run_id": "37569959104",
+  "source_sha": "18640ea5e3afab3fc2c31783589b73204feb67f0",
+  "counts": {
+    "found": 136,
+    "existing": 0,
+    "hydrated": 132,
+    "stratz_missing": 4,
+    "ineligible": 105,
+    "eligible": 27,
+    "selected": 5,
+    "posted": 0,
+    "deferred_post_cap": 22,
+    "truncated": true
+  },
+  "discovery_complete": true,
+  "hydration_complete": true,
+  "selected_match_ids": [
+    9030227890,
+    9030338907,
+    9030383798,
+    9030558830,
+    9030595760
+  ],
+  "seed_schema": "herald-complete-scan-selection-v1",
+  "source_artifact_id": "11460542286",
+  "source_audit_sha256": "cf9fc3ac1f7ac7dff1169e722cfd9fc21003a5be0915e19c0115274faa301580",
+  "source_send_step": "skipped"
+}
