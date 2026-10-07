@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import time
 from urllib.parse import urlsplit
@@ -33,13 +34,16 @@ MAX_CANDIDATES = 500
 MAX_POSTS = 5
 MAX_HISTORY_PAGES = 10
 MAX_ICON_DOWNLOADS = 256
-MAX_ICON_BYTES = 2_000_000
+MAX_ICON_BYTES = 4 * 1024 * 1024
 ICON_FETCH_SECONDS = 120
 SCHEMA = "herald-real-48h-20261007-v1"
 DETAIL_ATTEMPTS = 4
 MAX_RETRY_WAIT = 60
 MAX_DETAIL_RETRY_WAIT = 90
 MAX_DETAIL_HTTP_ATTEMPTS = 750
+SEED_SHA256 = "1368f7e4386a9d5ead87a87c9b2dac84b508b404eb95f7a2ea41ba142bb8c8fa"
+SEED_RUN_ID = "37569959104"
+SELECTED_IDS = (9030227890, 9030338907, 9030383798, 9030558830, 9030595760)
 
 
 class Stop(RuntimeError):
@@ -59,6 +63,39 @@ def safe_request_identity(method, url):
             r"/api/v10/(?:users/@me|oauth2/applications/@me|applications/[0-9]+/emojis|channels/[0-9]+(?:/messages(?:/[0-9]+)?|/messages/[0-9]+/threads)?)", parsed.path):
         provider, path = "discord", parsed.path
     return {"provider": provider, "method": method if method in {"GET", "POST"} else "OTHER", "path": path}
+
+
+def load_completed_seed(path):
+    data = path.read_bytes()
+    if len(data) > 4096 or hashlib.sha256(data).hexdigest() != SEED_SHA256:
+        raise Stop("Completed-scan seed is not the exact reviewed artifact-derived seed.")
+    seed = json.loads(data)
+    if (seed.get("run_id") != SEED_RUN_ID or seed.get("source_send_step") != "skipped" or
+            seed.get("repository") != REPOSITORY or seed.get("guild") != GUILD or
+            seed.get("channel") != CHANNEL or seed.get("bot") != BOT or
+            seed.get("start_inclusive") != START or seed.get("end_exclusive") != END or
+            seed.get("discovery_complete") is not True or seed.get("hydration_complete") is not True or
+            tuple(seed.get("selected_match_ids", [])) != SELECTED_IDS or seed.get("counts", {}).get("posted") != 0):
+        raise Stop("Seed does not prove this exact completed scan and never-sent selection.")
+    return seed
+
+
+def revalidate_candidates(client, seed, scheduled):
+    from herald import api
+    ids = seed["selected_match_ids"]
+    rows = api.explorer_fetch(client, "SELECT match_id,start_time,avg_rank_tier,duration "
+        "FROM public_matches WHERE match_id IN (" + ",".join(str(mid) for mid in ids) + ") ORDER BY match_id")
+    if not isinstance(rows, list) or len(rows) != len(ids):
+        raise Stop("A selected match is missing from public discovery; no substitution or posts.")
+    found = {}
+    for row in rows:
+        mid = row.get("match_id")
+        if (type(mid) is not int or mid not in ids or mid in found or
+                type(row.get("start_time")) is not int or not START <= row["start_time"] < END or
+                not scheduled.candidate_ok(row)):
+            raise Stop("Selected match discovery no longer satisfies the fixed window/rules; no substitution.")
+        found[mid] = row
+    return [found[mid] for mid in ids]
 
 
 class AuditedReadClient:
@@ -362,7 +399,9 @@ def prepare_icons(selected, scheduled, fetch):
     eligible = [key for key in missing if key in sources]
     result = {"needed": len(keys), "already_bundled": len(keys) - len(missing),
               "missing_before": missing, "downloaded": [], "fallbacks": missing,
-              "fetch_authorized": fetch}
+              "fetch_authorized": fetch, "keys": sorted(keys), "failures": [
+                  {"key": key, "reason": "catalog_missing", "status_code": None} for key in missing if key not in sources],
+              "failure_count": len(missing)}
     if fetch and len(eligible) > MAX_ICON_DOWNLOADS:
         result["blocked"] = "selected_icon_download_budget_exceeded"
         return result
@@ -374,6 +413,7 @@ def prepare_icons(selected, scheduled, fetch):
         with httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as client:
             for key in eligible:
                 if time.monotonic() >= deadline:
+                    result["failures"].append({"key": key, "reason": "time_budget_exhausted", "status_code": None})
                     break
                 url = sources[key]
                 parsed = urlsplit(url)
@@ -381,17 +421,23 @@ def prepare_icons(selected, scheduled, fetch):
                         not re.fullmatch(r"/apps/dota2/images/dota_react/(heroes|items|abilities)/[a-z0-9_]+\.png", parsed.path)
                         or parsed.query or parsed.fragment):
                     raise Stop("Artwork source is outside the pinned official public CDN path.")
+                status, received, reason = None, 0, "invalid_image"
                 try:
                     with client.stream("GET", url) as response:
+                        status = response.status_code
                         if response.status_code != 200:
+                            result["failures"].append({"key": key, "reason": "http_status", "status_code": status})
                             continue
                         data = bytearray()
                         for part in response.iter_bytes():
                             data.extend(part)
+                            received = len(data)
                             if len(data) > MAX_ICON_BYTES:
+                                reason = "response_byte_cap"
                                 raise ValueError("Oversized artwork")
                     with Image.open(BytesIO(data)) as source:
                         if source.width > 2048 or source.height > 2048:
+                            result["failures"].append({"key": key, "reason": "image_dimension_cap", "status_code": status})
                             continue
                         im = source.convert("RGB")
                         im.thumbnail((256, 160) if key.startswith("hero_") else (128, 128), Image.Resampling.LANCZOS)
@@ -399,8 +445,10 @@ def prepare_icons(selected, scheduled, fetch):
                     accepted[key] = url
                     valid.add(key)
                     result["downloaded"].append(key)
-                except (httpx.HTTPError, OSError, ValueError):
-                    continue  # Actual ID placeholder remains visible; never invent art.
+                except httpx.HTTPError:
+                    result["failures"].append({"key": key, "reason": "transport_error", "status_code": status})
+                except (OSError, ValueError):
+                    result["failures"].append({"key": key, "reason": reason, "status_code": status, "received_bytes": received})
     if accepted:
         path = card_images.ASSET_DIR / "sources.json"
         recorded = json.loads(path.read_text()) if path.exists() else {}
@@ -408,18 +456,54 @@ def prepare_icons(selected, scheduled, fetch):
         save_json(path, recorded)
     card_images._asset.cache_clear()
     result["fallbacks"] = sorted(keys - valid)
+    result["failure_count"] = len(result["fallbacks"])
     return result
 
 
-def prepare(audit, fetch_icons=False):
+def preserve_icon_cache(audit, icons, scheduled):
+    """Keep only selected validated public PNGs, never raw match/account data."""
+    from herald import card_images
+    from PIL import Image
+    directory = audit / "selected-icons"
+    directory.mkdir(exist_ok=True)
+    records, total = {}, 0
+    for key in icons.get("keys", []):
+        if not re.fullmatch(r"(?:hero|item|ability)_[1-9][0-9]*", key):
+            raise Stop("Invalid selected icon cache key.")
+        path = card_images.ASSET_DIR / (key + ".png")
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        try:
+            with Image.open(BytesIO(data)) as image:
+                if image.format != "PNG" or image.width > 2048 or image.height > 2048:
+                    continue
+                image.verify()
+        except (OSError, ValueError):
+            continue
+        total += len(data)
+        if len(data) > MAX_ICON_BYTES or total > 32 * 1024 * 1024:
+            raise Stop("Selected icon audit cache exceeds its fixed byte budget.")
+        (directory / (key + ".png")).write_bytes(data)
+        records[key] = {"filename": key + ".png", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    save_json(directory / "manifest.json", records)
+    icons["preserved_cache"] = {"count": len(records), "bytes": total, "directory": "selected-icons"}
+
+
+def prepare(audit, fetch_icons=False, completed_seed=None):
     import httpx
     from herald import api, scheduled
+    seed = load_completed_seed(completed_seed) if completed_seed is not None else None
     if audit.exists() and any(audit.iterdir()):
         raise Stop("Preparation audit directory must be new and empty; never reset an earlier run.")
     audit.mkdir(parents=True, mode=0o700, exist_ok=True)
     state = {**plan(), "phase": "preparing", "run_id": os.environ["GITHUB_RUN_ID"],
              "source_sha": os.environ.get("REVIEWED_SOURCE_SHA"), "counts": {}, "matches": [],
              "discovery_complete": False, "hydration_complete": False}
+    state["counts_scope"] = "selected_match_revalidation" if seed else "full_window_scan"
+    if seed:
+        state["prior_complete_scan"] = seed
+        state["prior_scan_counts"] = seed["counts"]
     save_json(audit / "result.json", state)
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if not token.strip() or not os.environ.get("STRATZ_API_TOKEN", "").strip():
@@ -433,13 +517,17 @@ def prepare(audit, fetch_icons=False):
             identity(discord)
             state["stage"] = "discord_duplicate_history"
             seen, state["history"] = existing_matches(discord)
+            if seed and seen.intersection(seed["selected_match_ids"]):
+                state["seed_duplicate_match_ids"] = sorted(seen.intersection(seed["selected_match_ids"]))
+                raise Stop("A pinned selected match is already posted; stop without substitution or sends.")
             state["stage"] = "discord_emojis"
             app = discord.request("GET", "/oauth2/applications/@me")
             emojis = discord.request("GET", f"/applications/{app['id']}/emojis")
             emoji_map = {e["name"]: e["id"] for e in emojis.get("items", [])}
-            state["stage"] = "opendota_discovery"
-            candidates = scheduled.discover(client, END, backfill=2)
-            state["discovery_complete"] = True
+            state["stage"] = "selected_match_discovery_revalidation" if seed else "opendota_discovery"
+            candidates = revalidate_candidates(client, seed, scheduled) if seed else scheduled.discover(client, END, backfill=2)
+            state["discovery_complete"] = seed is None
+            state["selected_lookup_complete"] = bool(seed)
             counts = state["counts"] = {"found": len(candidates), "existing": 0, "hydrated": 0,
                 "stratz_missing": 0, "ineligible": 0, "eligible": 0, "selected": 0, "posted": 0,
                 "deferred_post_cap": 0, "truncated": False}
@@ -468,6 +556,8 @@ def prepare(audit, fetch_icons=False):
                         counts["stratz_missing"] += 1
                         state["matches"].append({"match_id": mid, "status": "stratz_missing"})
                         save_json(audit / "result.json", state)
+                        if seed:
+                            raise Stop("A pinned selected match is missing from STRATZ; no substitution or posts.")
                         continue
                     if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] != mid:
                         raise Stop("STRATZ detail does not identify the requested match; no posts were sent.")
@@ -494,6 +584,8 @@ def prepare(audit, fetch_icons=False):
                     state["selected_match_ids"] = [c["match_id"] for c, *_ in selected]
                     state["matches"].append({"match_id": mid, "status": status})
                     save_json(audit / "result.json", state)
+                    if seed and status != "selected":
+                        raise Stop("A pinned selected match no longer qualifies; no substitution or posts.")
                     time.sleep(1.1)
             counts["selected"] = len(selected)
             counts["deferred_post_cap"] = counts["eligible"] - len(selected)
@@ -502,6 +594,7 @@ def prepare(audit, fetch_icons=False):
             state["stage"] = "selected_artwork"
             state.pop("current_match_id", None)
             state["icons"] = prepare_icons(selected, scheduled, fetch_icons)
+            preserve_icon_cache(audit, state["icons"], scheduled)
             save_json(audit / "result.json", state)
             if state["icons"].get("blocked") or state["icons"].get("fallbacks"):
                 raise Stop("Selected artwork is incomplete; exact missing IDs are in the sanitized audit. No posts were sent.")
@@ -534,7 +627,7 @@ def prepare(audit, fetch_icons=False):
             ledger.conn.close()
     state["prepared_db_sha256"] = hashlib.sha256((audit / "receipts.sqlite3").read_bytes()).hexdigest()
     save_json(audit / "result.json", state)
-    print(json.dumps({key: state[key] for key in ("phase", "window_utc", "counts", "selected_match_ids", "icons")}))
+    print(json.dumps({key: state[key] for key in ("phase", "window_utc", "counts_scope", "counts", "selected_match_ids", "icons", "prior_scan_counts") if key in state}))
 
 
 def send(audit):
@@ -588,7 +681,7 @@ def send(audit):
                 save_json(audit / "result.json", state)
         finally:
             ledger.conn.close()
-    print(json.dumps({key: state[key] for key in ("phase", "window_utc", "counts", "receipts")}))
+    print(json.dumps({key: state[key] for key in ("phase", "window_utc", "counts_scope", "counts", "receipts", "prior_scan_counts") if key in state}))
 
 
 def main(argv=None):
@@ -596,6 +689,8 @@ def main(argv=None):
     parser.add_argument("phase", choices=("plan", "prepare", "send"), nargs="?", default="plan")
     parser.add_argument("--audit-dir", type=Path)
     parser.add_argument("--fetch-selected-icons", action="store_true")
+    parser.add_argument("--completed-scan-seed", type=Path,
+                        help="Revalidate only the exact reviewed five-match completed-scan selection.")
     args = parser.parse_args(argv)
     if args.phase == "plan":
         print(json.dumps(plan(), indent=2))
@@ -606,10 +701,10 @@ def main(argv=None):
             raise Stop("An isolated audit directory is required.")
         logging.disable(logging.CRITICAL)  # Do not print raw provider exception bodies.
         if args.phase == "prepare":
-            prepare(args.audit_dir, args.fetch_selected_icons)
+            prepare(args.audit_dir, args.fetch_selected_icons, args.completed_scan_seed)
         else:
-            if args.fetch_selected_icons:
-                raise Stop("Send never fetches or changes artwork.")
+            if args.fetch_selected_icons or args.completed_scan_seed:
+                raise Stop("Send never fetches artwork or changes its prepared selection.")
             send(args.audit_dir)
         return 0
     except Stop as exc:

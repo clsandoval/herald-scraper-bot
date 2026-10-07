@@ -1,4 +1,5 @@
 {
+  "ability_1229": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/sandking_scorpion_strike.png",
   "ability_343": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/drow_ranger_multishot.png",
   "ability_5003": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/antimage_mana_break.png",
   "ability_5004": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/antimage_blink.png",
@@ -29,6 +30,9 @@
   "ability_5075": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/pudge_meat_hook.png",
   "ability_5076": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/pudge_rot.png",
   "ability_5077": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/pudge_dismember.png",
+  "ability_5102": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/sandking_burrowstrike.png",
+  "ability_5103": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/sandking_sand_storm.png",
+  "ability_5105": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/sandking_epicenter.png",
   "ability_5126": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/crystal_maiden_crystal_nova.png",
   "ability_5127": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/crystal_maiden_frostbite.png",
   "ability_5128": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/crystal_maiden_brilliance_aura.png",
@@ -51,7 +55,11 @@
   "hero_8": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/juggernaut.png",
   "item_1": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/blink.png",
   "item_108": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/ultimate_scepter.png",
+  "item_1097": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/disperser.png",
   "item_112": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/assault.png",
   "item_133": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/rapier.png",
-  "item_151": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/armlet.png"
+  "item_151": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/armlet.png",
+  "item_180": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/arcane_boots.png",
+  "item_1808": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/angels_demise.png",
+  "item_228": "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/recipe.png"
 }
