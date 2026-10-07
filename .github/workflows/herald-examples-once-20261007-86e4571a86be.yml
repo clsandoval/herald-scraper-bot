@@ -1,0 +1,193 @@
+# LOCAL PROPOSAL ONLY. Do not publish until the reviewed source SHA and live
+# authorization are confirmed. Publish under the unique filename in the README.
+name: One-shot synthetic examples 20261007-86e4571a86be
+
+on:
+  push:
+    branches:
+      - test/herald-examples-once-20261007-86e4571a86be
+
+permissions:
+  contents: read
+
+# Never interrupt an in-flight Discord write because another event arrived.
+concurrency:
+  group: herald-examples-once-20261007-86e4571a86be
+  cancel-in-progress: false
+
+env:
+  # Replace only after the final reviewed code is published and verified.
+  REVIEWED_SOURCE_SHA: 6bd06ba45976ac4ca3e108783e13bfd8f0f9085a
+  MPLBACKEND: Agg
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  send-exactly-two-examples:
+    # New workflow + new exact branch only. Later pushes, force pushes, branch
+    # deletions, subsequent workflow runs and all reruns must skip this job.
+    if: >-
+      ${{ github.repository == 'clsandoval/herald-scraper-bot' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/test/herald-examples-once-20261007-86e4571a86be' &&
+          github.event.created == true &&
+          github.event.deleted == false &&
+          github.event.forced == false &&
+          github.event.before == '0000000000000000000000000000000000000000' &&
+          github.run_number == '1' &&
+          github.run_attempt == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Reject placeholders and recheck one-shot event without secrets
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "${RUNNER_DEBUG:-}" != 1
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          sha = os.environ['REVIEWED_SOURCE_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}', sha) or sha == '0' * 40:
+              raise SystemExit('A verified immutable reviewed source SHA is required.')
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          assert os.environ['GITHUB_REPOSITORY'] == 'clsandoval/herald-scraper-bot'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'push'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/test/herald-examples-once-20261007-86e4571a86be'
+          assert event.get('created') is True
+          assert event.get('deleted') is False
+          assert event.get('forced') is False
+          assert event.get('before') == '0' * 40
+          PY
+
+      - name: Check out the reviewed immutable source, never the trigger branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7; existing offline QA pin
+        with:
+          repository: clsandoval/herald-scraper-bot
+          ref: ${{ env.REVIEWED_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify source identity and prepare a separate audit directory
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SOURCE_SHA"
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/herald-example-audit"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          audit = Path(os.environ['RUNNER_TEMP']) / 'herald-example-audit'
+          metadata = {
+              'source_sha': os.environ['REVIEWED_SOURCE_SHA'],
+              'workflow_sha': os.environ['GITHUB_WORKFLOW_SHA'],
+              'trigger_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'channel': '1392724276334825584',
+              'count': 2,
+              'synthetic_ids': [-101, -102],
+              'retry_policy': 'No automatic retry; uncertain results require manual reconciliation.',
+          }
+          (audit / 'run.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+
+      - name: Set up pinned uv without a shared cache
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0; existing offline QA pin
+        with:
+          version: '0.12.19'
+          enable-cache: false
+
+      - name: Install locked dependencies without the Discord secret
+        run: uv sync --frozen
+
+      - name: Run offline regression tests without the Discord secret
+        run: uv run --offline --frozen pytest -q
+
+      - name: Verify the bounded synthetic preview without the Discord secret
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m herald.examples --dry-run --count 2 \
+            --channel 1392724276334825584 > "$RUNNER_TEMP/herald-example-audit/preview.json"
+          .venv/bin/python - <<'PY'
+          import json, os
+          from pathlib import Path
+          preview = json.loads((Path(os.environ['RUNNER_TEMP']) / 'herald-example-audit/preview.json').read_text())
+          assert preview['mode'] == 'dry-run' and preview['synthetic'] is True
+          assert preview['channel'] == '1392724276334825584'
+          assert preview['thread_count'] == 2 and preview['message_count'] == 6
+          assert [spec['match_id'] for spec in preview['payloads']] == [-101, -102]
+          assert all(spec['example']['synthetic'] is True for spec in preview['payloads'])
+          PY
+
+      - name: Send once to the fixed channel; never retry this step
+        id: send
+        timeout-minutes: 5
+        # This is the ONLY step receiving the user-managed repository secret.
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "${RUNNER_DEBUG:-}" != 1
+          if [[ -z "${DISCORD_BOT_TOKEN//[[:space:]]/}" ]]; then
+            echo 'Required user-managed repository secret is absent.' >&2
+            exit 1
+          fi
+          audit="$RUNNER_TEMP/herald-example-audit"
+          printf '%s\n' 'started; outcome not yet known; do not retry' > "$audit/send-state.txt"
+          set +e
+          .venv/bin/python -m herald.examples --send --count 2 \
+            --channel 1392724276334825584 \
+            --receipts "$audit/receipts.sqlite3" \
+            > "$audit/result.json" 2> "$RUNNER_TEMP/herald-example-error.txt"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$audit/send-exit-code.txt"
+          if [[ "$status" != 0 ]]; then
+            echo 'Delivery stopped. Treat the outcome as uncertain; do not rerun, recreate the branch, or resend.' >&2
+            exit "$status"
+          fi
+          printf '%s\n' 'CLI completed; validate result and receipts before claiming success' > "$audit/send-state.txt"
+
+      - name: Validate both delivery receipts without the Discord secret
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          import json, os, sqlite3
+          from pathlib import Path
+          audit = Path(os.environ['RUNNER_TEMP']) / 'herald-example-audit'
+          result = json.loads((audit / 'result.json').read_text())
+          assert result['mode'] == 'send' and result['synthetic'] is True
+          rows = result['receipts']
+          assert len(rows) == 2 and [r['example'] for r in rows] == [1, 2]
+          for row in rows:
+              assert row['verified'] is True and row['deleted'] is False
+              assert row['channel'] == '1392724276334825584'
+              assert all(isinstance(row[k], str) and row[k].isdigit()
+                         for k in ('parent', 'thread', 'radiant', 'dire'))
+          with sqlite3.connect((audit / 'receipts.sqlite3').as_uri() + '?mode=ro', uri=True) as db:
+              saved = db.execute('SELECT match_id, data FROM example_deliveries ORDER BY match_id').fetchall()
+          assert {match_id for match_id, _ in saved} == {-101, -102}
+          assert all(json.loads(data).get('verified') is True for _, data in saved)
+          (audit / 'send-state.txt').write_text('Both synthetic examples have verified delivery receipts.\n')
+          print('Both synthetic examples have verified delivery receipts. Preserve the audit artifact; do not rerun.')
+          PY
+
+      - name: Preserve bounded audit and receipts if the runner is still available
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1; official tag verified 2026-10-07
+        with:
+          name: herald-example-audit-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herald-example-audit/
+          retention-days: 7
+          if-no-files-found: warn
+          overwrite: false
+          include-hidden-files: false
