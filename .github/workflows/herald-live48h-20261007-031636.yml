@@ -1,0 +1,135 @@
+# LOCAL PROPOSAL ONLY. Do not publish/trigger while access or source review is pending.
+name: One-shot real Herald 48h 20261007-031636
+
+on:
+  push:
+    branches: [test/herald-live48h-20261007-031636]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: herald-real-live48h-20261007-031636
+  cancel-in-progress: false
+
+env:
+  REVIEWED_SOURCE_SHA: c46fa7004cd4b8510a496cb9f516cf3500b551ec
+  REVIEWED_RUNNER_SHA256: 2f9c87a45bed80fb880cdb5e7f0988da3be3017cc349c9284a08de9c87bed425
+  MPLBACKEND: Agg
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  live48h:
+    if: >-
+      ${{ github.repository == 'clsandoval/herald-scraper-bot' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/test/herald-live48h-20261007-031636' &&
+          github.event.created == true &&
+          github.event.deleted == false &&
+          github.event.forced == false &&
+          github.event.before == '0000000000000000000000000000000000000000' &&
+          github.run_number == '1' && github.run_attempt == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check one-shot identity without secrets
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "${RUNNER_DEBUG:-}" != 1
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['REVIEWED_SOURCE_SHA'])
+          assert re.fullmatch(r'[0-9a-f]{64}', os.environ['REVIEWED_RUNNER_SHA256'])
+          assert os.environ['GITHUB_REPOSITORY'] == 'clsandoval/herald-scraper-bot'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'push'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/test/herald-live48h-20261007-031636'
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          assert event.get('created') is True and event.get('deleted') is False
+          assert event.get('forced') is False and event.get('before') == '0' * 40
+          PY
+
+      - name: Check out reviewed immutable source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: clsandoval/herald-scraper-bot
+          ref: ${{ env.REVIEWED_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify reviewed source and runner
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SOURCE_SHA"
+          echo "$REVIEWED_RUNNER_SHA256  scripts/live_48h_20261007.py" | sha256sum -c -
+          python3 -m py_compile scripts/live_48h_20261007.py
+          python3 scripts/live_48h_20261007.py plan
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: '0.12.19'
+          enable-cache: false
+
+      - name: Install pinned dependencies without secrets
+        run: uv sync --frozen
+
+      - name: Verify focused offline contracts without secrets
+        run: |
+          uv run --offline --frozen pytest -q \
+            tests/test_live_48h.py tests/test_api_failures.py \
+            tests/test_scheduled.py tests/test_scheduled_attachments.py \
+            tests/test_examples.py tests/test_card_images.py tests/test_match_cards.py \
+            tests/test_parent_display.py tests/test_reporter_novelty.py tests/test_report_signals.py
+
+      - name: Discover and freeze at most five real reports without sending
+        timeout-minutes: 30
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          STRATZ_API_TOKEN: ${{ secrets.STRATZ_API_TOKEN }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          export PYTHONPATH="$GITHUB_WORKSPACE"
+          .venv/bin/python scripts/live_48h_20261007.py prepare \
+            --audit-dir "$RUNNER_TEMP/herald-live48h-audit" --fetch-selected-icons
+          # Selected real report artwork only; never call the bulk
+          # cache_card_icons.py --fetch maintenance command.
+
+      - name: Persist frozen intent and exact PNG bytes before Discord sends
+        id: prepared
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: herald-live48h-prepared-${{ github.run_id }}
+          path: ${{ runner.temp }}/herald-live48h-audit/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+
+      - name: Send frozen reports once, using persisted intent
+        timeout-minutes: 10
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          PREPARED_ARTIFACT_ID: ${{ steps.prepared.outputs.artifact-id }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          export PYTHONPATH="$GITHUB_WORKSPACE"
+          .venv/bin/python scripts/live_48h_20261007.py send \
+            --audit-dir "$RUNNER_TEMP/herald-live48h-audit"
+
+      - name: Preserve final or partial sanitized audit
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: herald-live48h-result-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herald-live48h-audit/
+          retention-days: 7
+          if-no-files-found: warn
+          overwrite: false
