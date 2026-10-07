@@ -7,17 +7,16 @@ Credentials are needed only for API calls, so selfchecks run offline.
 import argparse
 import json
 import logging
-import math
 import os
 import sqlite3
 import sys
 import time
-from collections import Counter, defaultdict
 
 import httpx
 
 from . import api
 from .api import explorer_fetch
+from .novelty import ItemCorpus, SkillCorpus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("ingest")
@@ -211,7 +210,9 @@ def match_view(raw):
         items = [p.get(f"item{i}Id") for i in range(6)]
         players.append({
             "hero_id": p["heroId"], "is_radiant": p["isRadiant"],
-            "k": p["kills"], "d": p["deaths"], "a": p["assists"],
+            # Archived partial detail is still displayable. Preserve absent
+            # stats as unknown; presentation must not invent a zero K/D/A.
+            "k": p.get("kills"), "d": p.get("deaths"), "a": p.get("assists"),
             "gpm": p.get("goldPerMinute", 0), "networth": p.get("networth", 0),
             "items": [i for i in items if i], "lane": p.get("lane"),
             "role": p.get("role"), "position": p.get("position"),
@@ -219,7 +220,8 @@ def match_view(raw):
             "purchases": (p.get("stats") or {}).get("itemPurchases") or [],
             "dplus": (p.get("dotaPlus") or {}).get("level") or 0,
         })
-    feeder = max(players, key=lambda p: p["d"])
+    feeder = max(players, key=lambda p: p["d"] if isinstance(p["d"], (int, float))
+                 else float("-inf"))
     win_r = raw["didRadiantWin"]
     max_lead, min_lead = max(leads), min(leads)
     deficit = -min_lead if win_r else max_lead  # winner's worst deficit
@@ -531,48 +533,32 @@ def prune(conn):
 def score_weirdness(conn):
     items_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "assets", "items.json")
-    items = json.load(open(items_path))
-    # 1k floor (was 2k): captures cheaper mid-game item choices as off-meta signal
+    with open(items_path) as source:
+        items = json.load(source)
+    # Menu eligibility stays here; shared math accepts its caller's families.
     fam = {v["id"]: (v.get("dname") or str(v["id"])) for v in items.values()
            if (v.get("cost") or 0) >= 1000}
-    # two streaming passes over raw — never hold the corpus in memory (1GB VM)
-    hcount, htot, gcount = Counter(), Counter(), Counter()
-    gtot = 0
-    for (raw,) in conn.execute("SELECT raw FROM matches"):
-        for p in json.loads(raw)["players"]:
-            for b in (p.get("stats") or {}).get("itemPurchases") or []:
-                if b["itemId"] in fam and b["time"] > 0:
-                    hcount[(p["heroId"], b["itemId"])] += 1
-                    htot[p["heroId"]] += 1
-                    gcount[b["itemId"]] += 1
-                    gtot += 1
-    if not gtot:
-        return 0
-    V = len(fam)
-
-    def pmi(h, i):
-        ph = (hcount[(h, i)] - 1 + 0.5) / (htot[h] + 0.5 * V)  # own purchase excluded
-        return -math.log(max(ph / (gcount[i] / gtot), 1e-9))
+    corpus = ItemCorpus.fit(
+        (json.loads(raw) for (raw,) in conn.execute("SELECT raw FROM matches")), fam)
+    # Completing an evidence-free refresh is a successful zero, including
+    # clearing stale positives. NULL would trigger an endless partial-pair retry.
+    if not corpus.gtot:
+        n = conn.execute("SELECT count(*) FROM matches").fetchone()[0]
+        conn.execute("UPDATE matches SET weirdness=0.0, weird_notes='[]'")
+        conn.commit()
+        return n
 
     n = 0
     updates = []
     NOTE_BAR = 8.0  # extra players only get receipts when independently this weird
     for mid, raw in conn.execute("SELECT match_id, raw FROM matches"):
-        scored = []  # (score, hero_id, [(fam, minute, pmi)...])
+        scored = []
         for p in json.loads(raw)["players"]:
-            best = {}  # family -> (pmi, minute)
-            for b in (p.get("stats") or {}).get("itemPurchases") or []:
-                if b["itemId"] in fam and b["time"] > 0:
-                    s = pmi(p["heroId"], b["itemId"])
-                    f = fam[b["itemId"]]
-                    if s > best.get(f, (0, 0))[0]:
-                        best[f] = (s, b["time"] // 60)
-            top = sorted(((v[0], v[1], f) for f, v in best.items()), reverse=True)[:3]
-            scored.append((sum(t[0] for t in top), p["heroId"],
-                           [[f, t, round(s, 1)] for s, t, f in top]))
+            result = corpus.score_player(p, target_in_reference=True)
+            scored.append((result.score, p["heroId"],
+                           [[r.family, r.minute, round(r.score, 1)] for r in result.items]))
         scored.sort(reverse=True)
-        # accumulate every player over the bar (two trolls beat one); below the
-        # bar the weirdest player alone carries the score
+        # Menu match aggregation and rounding are unchanged.
         over = [s for s, _h, _t in scored if s >= NOTE_BAR]
         w = sum(over) if over else (scored[0][0] if scored else 0.0)
         notes = [{"hero_id": h, "score": round(s, 1), "items": tp}
@@ -585,26 +571,25 @@ def score_weirdness(conn):
 
 
 # --- SKILL-ORDER WEIRDNESS (corpus-relative, no network) ---
-# Positional surprisal: -log P(ability | hero, mode, skill-index), sibling of
-# score_weirdness's item PMI. Ported from the validated spike
-# (spikes/skill-weirdness/pmi2.py + rules.py + tune.py) — logic only, not the
-# spike's file I/O (reads raw from the matches table instead of abil.tsv.gz).
+# The menu owns its excluded modes and p99 receipt threshold; positional
+# math is shared with reporters without importing any menu population policy.
 
 def score_skill_weirdness(conn):
     ability_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "assets", "ability_ids.json")
-    ability_names = json.load(open(ability_path))
-    ability_names.pop("0", None)  # dota_base_ability, Stratz null placeholder
-
-    # Ranked-only discovery (NEW LOCKED decision A) makes gameMode effectively
-    # single-valued going forward; the mode-keyed stats below and this
-    # exclusion list are kept anyway as cheap no-op robustness for pre-purge
-    # rows and any future mode drift.
+    with open(ability_path) as source:
+        ability_names = json.load(source)
+    ability_names.pop("0", None)
     EXCLUDE_MODES = {"SINGLE_DRAFT", "RANDOM_DRAFT"}
 
-    def build_skills(p):
-        return [e["abilityId"] for e in (p.get("abilities") or [])
-                if not e.get("isTalent") and e.get("abilityId")][:12]
+    def reference_matches():
+        for (raw,) in conn.execute("SELECT raw FROM matches"):
+            match = json.loads(raw)
+            # Unknown/absent modes retain their historical distinct None bucket.
+            if match.get("gameMode") not in EXCLUDE_MODES:
+                yield match
+
+    corpus = SkillCorpus.fit(reference_matches)
 
     def label(sk, ult):
         """Human tag for a weird build — receipt decoration, not scoring."""
@@ -614,71 +599,13 @@ def score_skill_weirdness(conn):
         if ult is not None and ult not in sk and len(sk) >= 10:
             tags.append("never skilled ult")
         if len(sk) >= 3 and sk[0] == sk[1] == sk[2]:
-            tags.append(f"opened {ability_names.get(str(sk[0]), sk[0]).split('_')[-1]} x3")
+            name = ability_names.get(str(sk[0]), f"Ability {sk[0]}")
+            tags.append(f"opened {name.split('_')[-1]} x3")
         return ", ".join(tags)
 
-    # Pass 1: hero ability pools + corpus-derived ults, mode-agnostic (kits
-    # don't vary by mode) — never holds raw, just these two counters.
-    seen, hero_builds = Counter(), Counter()
-    first_idx = defaultdict(list)
-    for (raw,) in conn.execute("SELECT raw FROM matches"):
-        m = json.loads(raw)
-        if m.get("gameMode") in EXCLUDE_MODES:
-            continue
-        for p in m["players"]:
-            skills = build_skills(p)
-            if not skills:
-                continue
-            hero = p["heroId"]
-            hero_builds[hero] += 1
-            for a in set(skills):
-                seen[(hero, a)] += 1
-            first = {}
-            for i, a in enumerate(skills):
-                first.setdefault(a, i)
-            for a, i in first.items():
-                first_idx[(hero, a)].append(i)
-
-    pool = defaultdict(set)
-    for (hero, a), cnt in seen.items():
-        if cnt >= max(3, 0.01 * hero_builds[hero]):
-            pool[hero].add(a)
-
-    ults_raw = {}
-    for (hero, a), idxs in first_idx.items():
-        if len(idxs) < 0.3 * hero_builds[hero]:
-            continue
-        med = sorted(idxs)[len(idxs) // 2]
-        if med > ults_raw.get(hero, (None, -1))[1]:
-            ults_raw[hero] = (a, med)
-    ults = {h: a for h, (a, med) in ults_raw.items() if med >= 4}
-
-    # Pass 2: (hero, mode, idx, ability) corpus stats, pool-filtered builds only
-    count, tot = Counter(), Counter()
-    for (raw,) in conn.execute("SELECT raw FROM matches"):
-        m = json.loads(raw)
-        if m.get("gameMode") in EXCLUDE_MODES:
-            continue
-        mode = m.get("gameMode")
-        for p in m["players"]:
-            hero = p["heroId"]
-            filtered = [a for a in build_skills(p) if a in pool.get(hero, ())]
-            if len(filtered) < 6:
-                continue
-            for i, a in enumerate(filtered):
-                count[(hero, mode, i, a)] += 1
-                tot[(hero, mode, i)] += 1
-
-    def surprise(hero, mode, idx, a, pool_size):
-        p = (count[(hero, mode, idx, a)] - 1 + 0.5) / (tot[(hero, mode, idx)] - 1 + 0.5 * pool_size)
-        return -math.log(max(p, 1e-9))
-
-    # Pass 3: per-player scores. Buffers (per-match receipts + a flat float
-    # list for the p99) are small and bounded — the corpus is never held,
-    # only the count/tot/pool/ults dicts above plus these running buffers.
     all_scores = []
     updates = []
-    pending = []  # (mid, [(score, hero_id, picks, tag), ...])
+    pending = []
     n = 0
     for mid, raw in conn.execute("SELECT match_id, raw FROM matches"):
         m = json.loads(raw)
@@ -689,26 +616,15 @@ def score_skill_weirdness(conn):
         mode = m.get("gameMode")
         players = []
         for p in m["players"]:
-            hero = p["heroId"]
-            ult = ults.get(hero)
-            pool_size = len(pool.get(hero, ()))
-            filtered = [a for a in build_skills(p) if a in pool.get(hero, ())]
-            cands = []
-            for i, a in enumerate(filtered):
-                s = surprise(hero, mode, i, a, pool_size)
-                if ult is not None and a == ult and filtered.index(a) <= 5:
-                    s *= 0.5  # banked-points discount on an early-picked ult
-                cands.append((s, i, a))
-            best = {}  # ability -> (surprise, index), keep best per ability
-            for s, i, a in cands:
-                if s > best.get(a, (-1, 0))[0]:
-                    best[a] = (s, i)
-            top = sorted(((s, i, a) for a, (s, i) in best.items()), reverse=True)[:3]
-            score = sum(s for s, _i, _a in top)
-            picks = [[ability_names.get(str(a), a), i + 1, round(s, 1)] for s, i, a in top]
-            tag = label(filtered, ult)
-            players.append((score, hero, picks, tag))
-            all_scores.append(score)
+            result = corpus.score_player(p, mode, target_in_reference=True)
+            if result is None:
+                continue
+            # The menu retains its legacy pool-compressed pick numbering.
+            picks = [[ability_names.get(str(r.ability_id), f"Ability {r.ability_id}"),
+                      r.pick, round(r.score, 1)] for r in result.picks]
+            players.append((result.score, p["heroId"], picks,
+                            label(result.skills, result.ult)))
+            all_scores.append(result.score)
         pending.append((mid, players))
 
     all_scores.sort()
@@ -730,6 +646,23 @@ def score_skill_weirdness(conn):
     )
     conn.commit()
     return n
+
+
+def should_rescore(conn, cycle_number, retry=False):
+    """Keep the established batch cadence, but recover interrupted score pairs.
+
+    New/re-enriched rows missing both scores retain the >500-row trigger and
+    50-cycle cadence. A row with just one missing score indicates an unfinished
+    scoring pair; retry it next cycle even in a small archive. The explicit retry
+    flag also covers failures during a refresh of previously non-NULL scores.
+    """
+    if retry or (cycle_number and cycle_number % 50 == 0):
+        return True
+    unscored, incomplete = conn.execute(
+        "SELECT count(*), coalesce(sum((weirdness IS NULL) != (skill_weirdness IS NULL)), 0)"
+        " FROM matches WHERE weirdness IS NULL OR skill_weirdness IS NULL"
+    ).fetchone()
+    return unscored > 500 or incomplete > 0
 
 
 # --- RECOMPUTE (derived columns from stored raw, no network) ---
@@ -1024,19 +957,20 @@ def main():
         return
     if args.loop is not None:
         n = 0
+        rescore_retry = False
         while True:
             try:
                 cycle(conn)
                 # Self-healing rescore: re-enrich sweeps and backfill waves
                 # null both weirdness columns via INSERT OR REPLACE — rescore
                 # whenever the unscored pile grows past a cycle's worth, plus
-                # the ~daily floor. NOT at boot (raced board startup into OOM).
-                unscored = conn.execute(
-                    "SELECT count(*) FROM matches WHERE weirdness IS NULL"
-                ).fetchone()[0]
-                if (n and n % 50 == 0) or unscored > 500:
+                # the 50-cycle floor. No unconditional boot rescore (it raced
+                # board startup into OOM). Failed pairs retry next cycle.
+                if should_rescore(conn, n, retry=rescore_retry):
+                    rescore_retry = True
                     log.info(f"weirdness: {score_weirdness(conn)} matches scored")
                     log.info(f"skill weirdness: {score_skill_weirdness(conn)} matches scored")
+                    rescore_retry = False
             except Exception as e:
                 log.error(f"cycle failed: {e}")
             n += 1

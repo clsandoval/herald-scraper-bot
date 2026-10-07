@@ -10,6 +10,7 @@ import datetime as dt
 import fcntl
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -17,7 +18,7 @@ import time
 
 import httpx
 
-from . import api, render
+from . import api, render, report_signals, reporter_novelty
 
 log = logging.getLogger(__name__)
 LOOKBACK_DAYS = 1
@@ -28,12 +29,18 @@ MAX_AVERAGE_RANK = 16
 MAX_PLAYER_RANK = 15
 DISCORD_API = "https://discord.com/api/v10"
 REPORT_FIELDS = """
-    id players {
-      heroId isRadiant kills deaths assists
+    id gameMode players {
+      heroId isRadiant kills deaths assists isRandom
       steamAccount { seasonRank }
       dotaPlus { level }
       item0Id item1Id item2Id item3Id item4Id item5Id
-      stats { actionsPerMinute }
+      abilities { abilityId time isTalent }
+      stats {
+        actionsPerMinute
+        itemPurchases { time itemId }
+        itemUsed { itemId count }
+        deathEvents { time timeDead isDieBack isAttemptTpOut }
+      }
     }
 """
 
@@ -58,42 +65,131 @@ def eligible(candidate, raw, opendota):
             and all(p.get("leaver_status") == 0 for p in od_players))
 
 
-def payload(candidate, raw, opendota, emojis):
+def skill_path(player, limit=280):
+    """Keep all twelve observed positions visible, with bounded ability labels."""
+    ids = report_signals._skill_ids(player)
+    if ids is None:
+        return "Unavailable"
+    if not ids:
+        return "No non-talent picks recorded"
+    names = [report_signals.ability_name(a, player.get("heroId")) for a in ids[:12]]
+    full_path = " → ".join(f"{i}. {name}" for i, name in enumerate(names, 1))
+    if len(full_path) <= limit:
+        return full_path
+    # Reserve every ordinal before allocating name space. Evidence receipts
+    # separately spell out the scored ability and its original observed pick.
+    width = max(4, (limit - sum(len(f"{i}. ") for i in range(1, len(names) + 1))
+                    - 3 * (len(names) - 1)) // len(names))
+    return " → ".join(f"{i}. {render.clip(name, width)}" for i, name in enumerate(names, 1))
+
+
+def payload(candidate, raw, opendota, emojis, evidence=None):
+    """Classic embed cards with factual build/event receipts, no menu ranking.
+
+    This stays a parent plus two team messages so existing delivery receipts
+    remain resumable. Components V2 is the interactive menu's separate format.
+    """
     mid = candidate["match_id"]
     date = dt.datetime.fromtimestamp(candidate["start_time"], dt.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S")
     duration = candidate["duration"]
-    density = (opendota["radiant_score"] + opendota["dire_score"]) / (opendota["duration"] / 60)
-    parent = {"embeds": [{"title": "🏆 Herald Match Analysis", "description": f"Match ID: {mid}",
-        "color": 0x00FF00, "url": f"https://stratz.com/matches/{mid}", "fields": [
+    scores = [opendota.get("radiant_score"), opendota.get("dire_score")]
+    known_scores = all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                       for value in scores)
+    if known_scores:
+        kills = sum(scores)
+        density = kills / max((opendota.get("duration") or duration) / 60, 1)
+        kill_label = f"{kills} · {density:.2f}/min"
+    else:
+        kill_label = "Unavailable"
+    signals = report_signals.summarize(raw, opendota, duration)
+    if evidence is None:
+        evidence = reporter_novelty.unavailable(raw)
+    cues = list(signals["match"][:2])
+    for index, receipts in signals["players"].items():
+        if receipts:
+            cues.append(f"{render.hero_name(raw['players'][index]['heroId'])}: {receipts[0]}")
+    cue_text = render.limited_lines([f"• {render.clip(cue, 180)}" for cue in cues[:4]], 800)
+    parent_fields = [
             {"name": "📅 Date", "value": date, "inline": True},
             {"name": "⏱️ Duration", "value": f"{duration // 60}m {duration % 60}s", "inline": True},
-            {"name": "⚔️ Kill Density", "value": f"{density:.2f}", "inline": True}],
-        "footer": {"text": "Herald Scraper Bot"}}], "allowed_mentions": {"parse": []}}
+            {"name": "⚔️ Kills", "value": kill_label, "inline": True},
+            {"name": "🔎 Review cues", "value": cue_text or
+             "No standout event cue in the supplied data. Check the item and skill paths below.",
+             "inline": False}]
+    item_index = reporter_novelty.best_player(evidence, "items")
+    if item_index is None:
+        item_index = next((i for i, items in signals["items"].items() if items), None)
+    if item_index is not None:
+        name = render.hero_name(raw["players"][item_index]["heroId"])
+        parent_fields.append({"name": "🎒 Build preview", "inline": False,
+                              "value": render.clip(f"**{name}** · " +
+                                  render.named_items(signals["items"].get(item_index, [])), 400) + "\n" +
+                                  reporter_novelty.evidence_text(evidence, "items", item_index,
+                                      raw["players"][item_index]["heroId"], limit=350)})
+    skill_index = reporter_novelty.best_player(evidence, "skills")
+    if skill_index is None:
+        skill_index = next((i for i, skills in signals["skills"].items() if skills), None)
+    if skill_index is not None:
+        name = render.hero_name(raw["players"][skill_index]["heroId"])
+        parent_fields.append({"name": "🧩 Skill preview", "inline": False,
+                              "value": f"**{name}** · " + skill_path(raw["players"][skill_index], 340) + "\n" +
+                                  reporter_novelty.evidence_text(evidence, "skills", skill_index,
+                                      raw["players"][skill_index]["heroId"], limit=350)})
+    parent_fields.append({"name": "Reference population", "inline": False,
+                          "value": reporter_novelty.reference_text(evidence)})
+    parent = {"embeds": [{"title": "🏆 Herald Match Review", "description":
+        f"Match ID: {mid} · [OpenDota](https://www.opendota.com/matches/{mid})"
+        "\nTwo team cards in the thread show final items, early skill picks and observed moments.",
+        "color": 0xC8A03C, "url": f"https://stratz.com/matches/{mid}", "fields": parent_fields,
+        "footer": {"text": "Observed data · review cues are not a replay-quality score"}}],
+        "allowed_mentions": {"parse": []}}
     messages = []
-    for radiant, label, color in [(True, "RADIANT", 0x00FF00), (False, "DIRE", 0xFF0000)]:
+    for radiant, label, color in [(True, "RADIANT", 0x3BA55D), (False, "DIRE", 0xED4245)]:
         fields = []
-        for p in raw["players"]:
+        for index, p in enumerate(raw["players"]):
             if p["isRadiant"] != radiant:
                 continue
             rank = p["steamAccount"].get("seasonRank")
-            rank_label = "Unranked" if not rank else f"Herald {rank - 10}"
-            apm = (p.get("stats") or {}).get("actionsPerMinute") or []
+            rank_label = (f"Herald {rank - 10}" if isinstance(rank, int) and 11 <= rank <= 15
+                          else "Unranked" if not rank else "Rank unavailable")
+            stats = p.get("stats") if isinstance(p.get("stats"), dict) else {}
+            apm = stats.get("actionsPerMinute") or []
+            apm = apm if isinstance(apm, list) else []
+            apm = [value for value in apm if isinstance(value, (int, float))
+                   and not isinstance(value, bool) and math.isfinite(value) and value >= 0]
             apm_label = f"{sum(apm) / len(apm):.1f}" if apm else "N/A"
-            inventory = [render.item_name(p[f"item{i}Id"]) for i in range(6) if p.get(f"item{i}Id")]
-            text = (f"**KDA:** {p['kills']}/{p['deaths']}/{p['assists']} | **Rank:** {rank_label} | "
-                    f"**APM:** {apm_label} | **Dota+:** {(p.get('dotaPlus') or {}).get('level') or 'None'}")
-            if inventory:
-                text += "\n**Items:** " + " | ".join(inventory)
+            inventory = signals["items"].get(index)
+            items_text = (render.named_items(inventory, emojis) if inventory else
+                          "No final-slot items recorded" if inventory == [] else "Unavailable")
+            if inventory and len(items_text) > 230:
+                items_text = render.named_items(inventory)
+            lines = ["**Items:** " + items_text,
+                     "**Skill picks:** " + skill_path(p, 240),
+                     "**Item evidence:** " + reporter_novelty.evidence_text(
+                         evidence, "items", index, p["heroId"], limit=155),
+                     "**Skill evidence:** " + reporter_novelty.evidence_text(
+                         evidence, "skills", index, p["heroId"], limit=155)]
+            receipts = signals["players"].get(index) or []
+            if receipts:
+                lines.append("**Review:** " + render.clip("; ".join(receipts[:2]), 90))
+            kda = "/".join(str(p[key]) if p.get(key) is not None else "?"
+                           for key in ("kills", "deaths", "assists"))
+            lines.append(f"**KDA:** {kda} · {rank_label} · "
+                         f"APM {apm_label} · Dota+ {(p.get('dotaPlus') or {}).get('level') or 'N/A'}")
+            text = render.limited_lines(lines, 1024)
             name = render.hero_name(p["heroId"])
             emoji_name = ("h_" + render.hero_short(p["heroId"]))[:32]
-            if emoji_name in emojis:
-                name = f"<:{emoji_name}:{emojis[emoji_name]}> {name}"
-            fields.append({"name": name[:256], "value": text[:1024], "inline": False})
-        messages.append({"embeds": [{"title": f"🛡️ {label} Team", "color": color, "fields": fields}],
+            if emoji := render.application_emoji(emoji_name, emojis):
+                name = f"{emoji} {name}"
+            fields.append({"name": render.clip(name, 256), "value": text, "inline": False})
+        messages.append({"embeds": [{"title": f"🛡️ {label} Team", "color": color, "fields": fields,
+                         "footer": {"text": "Final inventory · first 12 non-talent picks · experimental long-Herald reference"}}],
                          "allowed_mentions": {"parse": []}})
+    for message in [parent, *messages]:
+        render.check_embeds(message)
     return {"match_id": mid, "parent": parent, "thread_name": f"Match {mid} - {date}",
-            "teams": messages}
+            "teams": messages, "build_evidence": json.loads(json.dumps(evidence))}
 
 
 class Receipts:
@@ -102,6 +198,7 @@ class Receipts:
         self.conn.execute("CREATE TABLE IF NOT EXISTS deliveries (match_id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS pending_window (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
         self.conn.commit()
+        self.novelty = reporter_novelty.ReferenceStore(self.conn)
 
     def window(self, now, backfill):
         row = self.conn.execute("SELECT data FROM pending_window WHERE id=1").fetchone()
@@ -293,6 +390,7 @@ def discover(client, now, backfill=None):
 
 def run_once(ledger, client, token, channel, backfill=None):
     window = ledger.window(int(time.time()), backfill)
+    ledger.novelty.begin_pass(int(time.time()))
     log.info("Processing saved report window %s", report_window(window["now"], window["backfill"]))
     discord_api = DiscordHTTP(client, token)
     me = discord_api.request("GET", "/users/@me")
@@ -322,8 +420,11 @@ def run_once(ledger, client, token, channel, backfill=None):
             od = client.get(f"{api.OPENDOTA_URL}/matches/{candidate['match_id']}")
             od.raise_for_status()
             od = od.json()
+            if not isinstance(od, dict) or od.get("error") or od.get("err"):
+                raise RuntimeError("OpenDota match detail unavailable; report window preserved")
             if eligible(candidate, raw, od):
-                spec = payload(candidate, raw, od, emoji_map)
+                evidence = ledger.novelty.observe_and_score(candidate, raw, od)
+                spec = payload(candidate, raw, od, emoji_map, evidence=evidence)
                 deliver(discord_api, ledger, spec, channel, me["id"])
                 log.info("Verified report for match %s", candidate["match_id"])
             time.sleep(1.1)

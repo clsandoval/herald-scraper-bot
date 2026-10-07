@@ -6,6 +6,8 @@ Pure functions: data in, PNG bytes out.
 """
 
 import io
+from functools import wraps
+from threading import RLock
 
 import matplotlib
 
@@ -18,6 +20,34 @@ MUTED = "#949BA4"  # secondary text / axes
 GRID = "#3F4147"
 RADIANT = "#3BA55D"
 DIRE = "#ED4245"
+
+# Board renders run in worker threads. Agg avoids a GUI event loop, but pyplot
+# and Matplotlib artists are still not thread-safe. Serialize this shared layer.
+# https://matplotlib.org/stable/users/faq.html#work-with-threads
+_RENDER_LOCK = RLock()
+
+
+def _serialized_render(fn):
+    @wraps(fn)
+    def render(leads, *args, **kwargs):
+        with _RENDER_LOCK:
+            previous = set(plt.get_fignums())
+            try:
+                if not leads:
+                    fig, ax = plt.subplots(figsize=(4, 1.2), dpi=144)
+                    fig.patch.set_facecolor(SURFACE)
+                    ax.axis("off")
+                    ax.text(.5, .5, "Net-worth lead unavailable", ha="center", va="center",
+                            color=MUTED, transform=ax.transAxes)
+                    buffer = io.BytesIO()
+                    fig.savefig(buffer, format="png", facecolor=SURFACE)
+                    return buffer.getvalue()
+                return fn(leads, *args, **kwargs)
+            finally:
+                # Also free figures if savefig or malformed data raises.
+                for number in set(plt.get_fignums()) - previous:
+                    plt.close(number)
+    return render
 
 
 def _style(ax, fig):
@@ -36,6 +66,7 @@ def _fmt_gold(v, _pos=None):
     return f"{'-' if v < 0 else ''}{a / 1000:.0f}k" if a >= 1000 else f"{v:.0f}"
 
 
+@_serialized_render
 def networth_lead_png(leads: list[int], title: str = "Net Worth Lead") -> bytes:
     """Diverging-around-zero lead chart: green above (Radiant), red below (Dire)."""
     mins = list(range(len(leads)))
@@ -74,6 +105,7 @@ def networth_lead_png(leads: list[int], title: str = "Net Worth Lead") -> bytes:
     return buf.getvalue()
 
 
+@_serialized_render
 def sparkline_png(leads: list[int]) -> bytes:
     """Tiny 400x100 lead sparkline for list-row thumbnails."""
     mins = list(range(len(leads)))
@@ -94,6 +126,7 @@ def sparkline_png(leads: list[int]) -> bytes:
     return buf.getvalue()
 
 
+@_serialized_render
 def thumb_spark_png(leads: list[int]) -> bytes:
     """Small 2:1 diverging lead chart for Section thumbnail accessories."""
     mins = list(range(len(leads)))

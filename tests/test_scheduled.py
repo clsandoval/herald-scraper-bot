@@ -157,15 +157,23 @@ def test_discovery_obeys_window_boundaries_and_original_filters(monkeypatch):
     assert 'avg_rank_tier <= 16' in query and 'lobby' not in query and 'kpm' not in query
 
 
-def test_minimal_report_stratz_request(monkeypatch):
+def test_bounded_report_stratz_request(monkeypatch):
     monkeypatch.setenv('STRATZ_API_TOKEN', 'synthetic-test-value')
     client = Mock()
     client.post.return_value = httpx.Response(200, json={'data': {'m0': None}},
                                              request=httpx.Request('POST', 'https://example.invalid'))
     s.api.stratz_fetch_batch(client, [1], fields=s.REPORT_FIELDS)
     query = client.post.call_args.kwargs['json']['query']
-    assert 'seasonRank' in query and 'actionsPerMinute' in query
-    assert 'abilities' not in query and 'allTalks' not in query and 'deathEvents' not in query
+    # Review observations ride the existing batch, with only used event fields.
+    # Do not import the menu's rich selection or request chat/location timelines.
+    for field in ('seasonRank', 'actionsPerMinute', 'abilities', 'abilityId',
+                  'isTalent', 'itemPurchases', 'itemUsed', 'deathEvents',
+                  'timeDead', 'isDieBack', 'isAttemptTpOut'):
+        assert field in query
+    for field in ('allTalks', 'chatWheels', 'inventoryReport', 'locationReport',
+                  'heroAverage', 'networthPerMinute', 'wards', 'tripsFountainPerMinute'):
+        assert field not in query
+    assert client.post.call_count == 1
 
 
 def test_failed_window_survives_restart_until_completed(tmp_path):

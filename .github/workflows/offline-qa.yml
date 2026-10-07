@@ -1,0 +1,38 @@
+name: Offline Herald QA
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: '0.12.19'
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --frozen
+      - name: Run offline regression and contract tests
+        run: uv run --offline --frozen pytest -q
+      - name: Check retained signal fixtures
+        run: |
+          uv run --offline --frozen python -m herald.ingest --selfcheck
+          uv run --offline --frozen python -m herald.ingest --skillcheck
+          uv run --offline --frozen python -m herald.ingest --signalcheck
