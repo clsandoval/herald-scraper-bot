@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REVIEWED_SOURCE_SHA: c46fa7004cd4b8510a496cb9f516cf3500b551ec
-  REVIEWED_RUNNER_SHA256: 2f9c87a45bed80fb880cdb5e7f0988da3be3017cc349c9284a08de9c87bed425
+  REVIEWED_SOURCE_SHA: 18640ea5e3afab3fc2c31783589b73204feb67f0
+  REVIEWED_RUNNER_SHA256: 9b3572aa0bf3ee362fd633641d68e0b445916c101681532b1e0a5fc759e530ab
   MPLBACKEND: Agg
   PYTHONUNBUFFERED: '1'
 
@@ -24,11 +24,11 @@ jobs:
       ${{ github.repository == 'clsandoval/herald-scraper-bot' &&
           github.event_name == 'push' &&
           github.ref == 'refs/heads/test/herald-live48h-20261007-031636' &&
-          github.event.created == true &&
+          github.event.created == false &&
           github.event.deleted == false &&
           github.event.forced == false &&
-          github.event.before == '0000000000000000000000000000000000000000' &&
-          github.run_number == '1' && github.run_attempt == '1' }}
+          github.event.before == 'ef517f6ef8383ae5436c98b7f140928d5e38edc1' &&
+          github.run_number == '2' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$GITHUB_RUN_NUMBER" = 1
+          test "$GITHUB_RUN_NUMBER" = 2
           test "${RUNNER_DEBUG:-}" != 1
           python3 - <<'PY'
           import json, os, re
@@ -50,8 +50,8 @@ jobs:
           assert os.environ['GITHUB_EVENT_NAME'] == 'push'
           assert os.environ['GITHUB_REF'] == 'refs/heads/test/herald-live48h-20261007-031636'
           event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-          assert event.get('created') is True and event.get('deleted') is False
-          assert event.get('forced') is False and event.get('before') == '0' * 40
+          assert event.get('created') is False and event.get('deleted') is False
+          assert event.get('forced') is False and event.get('before') == 'ef517f6ef8383ae5436c98b7f140928d5e38edc1'
           PY
 
       - name: Check out reviewed immutable source
