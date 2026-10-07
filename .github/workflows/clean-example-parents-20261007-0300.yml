@@ -1,7 +1,4 @@
 name: Clean two existing Herald example previews
-on:
-  push:
-    branches: [test/herald-clean-parents-20261007-0300]
 permissions:
   contents: read
 concurrency:
@@ -9,456 +6,51 @@ concurrency:
   cancel-in-progress: false
 jobs:
   clean:
-    if: >-
-      ${{ github.repository == 'clsandoval/herald-scraper-bot' && github.event.created == true && github.event.deleted == false && github.event.forced == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_number == '1' && github.run_attempt == '1' }}
+    if: ${{ github.repository == 'clsandoval/herald-scraper-bot' && github.event.created == false && github.event.deleted == false && github.event.forced == false && github.event.before == '4b9eee4962cad0232fb95aee00184956e1ed2362' && github.run_number == '2' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Prepare and verify reviewed cleanup script without credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$GITHUB_RUN_NUMBER" = 1
-          test "${RUNNER_DEBUG:-}" != 1
-          cat > "$RUNNER_TEMP/clean_example_parents.py" <<'PY_CLEAN_HERALD'
-          #!/usr/bin/env python3
-          """Review a fixed two-message edit offline; --apply only in the GitHub runner.
-          
-          No imports from the bot, token files, retries, creates, deletes, thread edits,
-          channel edits, uploads, webhook routes, or arbitrary destinations are supported.
-          """
-          from __future__ import annotations
-          
-          import argparse
-          import copy
-          from datetime import datetime, timezone
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import re
-          import sys
-          from urllib.error import HTTPError, URLError
-          from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
-          
-          API = "https://discord.com/api/v10"
-          GUILD_ID = "1392724275538038826"
-          CHANNEL_ID = "1392724276334825584"
-          BOT_ID = "1393107291741618359"
-          REPOSITORY = "clsandoval/herald-scraper-bot"
-          MANIFEST_VERSION = "clean-existing-example-parents-20261007-v1"
-          SOURCE_RUN_ID = "37563738367"
-          SOURCE_SHA = "9136e5290c196ebc1b7bdeafd5da4d0459d3c9ab"
-          JUGGERNAUT_ICON = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/juggernaut.png"
-          RAPIER_ICON = "https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/rapier.png"
-          # Exact original embed bodies from the verified send-time SQLite receipts.
-          ORIGINAL_EMBEDS = {'1557223202902515713': [{'color': 13148220,
-                                    'description': 'Scored build evidence. Invented match and reference '
-                                                   'data; two team images in the thread.',
-                                    'fields': [{'inline': True, 'name': '⏱️ Duration', 'value': '82m 0s'},
-                                               {'inline': True,
-                                                'name': '⚔️ Kills',
-                                                'value': '122 · 1.49/min'},
-                                               {'inline': False,
-                                                'name': '🔎 Review cues',
-                                                'value': '• <:h_antimage:1525034761998041229> Anti-Mage · '
-                                                         '<:i_armlet:1525035281844011049> Armlet of '
-                                                         'Mordiggian @20m · PMI 5.4\n'
-                                                         '• <:h_antimage:1525034761998041229> Anti-Mage · '
-                                                         'pick 1: Counterspell · surprisal 2.3'},
-                                               {'inline': False,
-                                                'name': 'Reference population',
-                                                'value': 'Synthetic · 40 generated matches · invented patch '
-                                                         '1 · target held out.'}],
-                                    'footer': {'text': 'SYNTHETIC EXAMPLE · invented data; not a quality '
-                                                       'score'},
-                                    'title': '🧪 EXAMPLE 1 · Synthetic Herald report'}],
-           '1557223226663505994': [{'color': 13148220,
-                                    'description': 'Cold start and missing evidence. Invented match and '
-                                                   'reference data; two team images in the thread.',
-                                    'fields': [{'inline': True, 'name': '⏱️ Duration', 'value': '82m 0s'},
-                                               {'inline': True,
-                                                'name': '⚔️ Kills',
-                                                'value': '122 · 1.49/min'},
-                                               {'inline': False,
-                                                'name': '🔎 Review cues',
-                                                'value': 'No standout cue recorded.'},
-                                               {'inline': False,
-                                                'name': 'Reference population',
-                                                'value': 'Synthetic · 0 matches. Unscored does not mean '
-                                                         'normal; missing logs stay unavailable.'}],
-                                    'footer': {'text': 'SYNTHETIC EXAMPLE · invented data; not a quality '
-                                                       'score'},
-                                    'title': '🧪 EXAMPLE 2 · Synthetic Herald report'}]}
-          MANIFEST = (
-              {
-                  "example": 1,
-                  "match_id": -101,
-                  "message_id": "1557223202902515713",
-                  "payload": {"embeds": [{
-                      "author": {"name": "Juggernaut", "icon_url": JUGGERNAUT_ICON},
-                      "title": "Rapier → dead in 35s",
-                      "description": "82m · 122 kills",
-                      "color": 13148220,
-                      "thumbnail": {"url": RAPIER_ICON},
-                      "footer": {"text": "Example"},
-                  }]},
-              },
-              {
-                  "example": 2,
-                  "match_id": -102,
-                  "message_id": "1557223226663505994",
-                  "payload": {"embeds": [{
-                      "title": "122 kills in 82 minutes",
-                      "description": "Radiant 55 · Dire 67",
-                      "color": 13148220,
-                      "footer": {"text": "Example"},
-                  }]},
-              },
-          )
-          EXPECTED_MESSAGE_IDS = ("1557223202902515713", "1557223226663505994")
-          PROTECTED_KEYS = ("content", "attachments", "components", "flags", "pinned", "tts",
-                            "mention_everyone", "mention_roles", "mentions", "message_reference", "sticker_items")
-          
-          
-          class Stop(Exception):
-              """A deliberately bounded, secret-free diagnostic."""
-          
-          
-          class NoRedirect(HTTPRedirectHandler):
-              def redirect_request(self, req, fp, code, msg, headers, newurl):
-                  # Never forward the Authorization header to a redirect destination.
-                  return None
-          
-          
-          def canonical(value):
-              return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-          
-          
-          def digest(value):
-              return hashlib.sha256(canonical(value).encode()).hexdigest()
-          
-          
-          def message_path(message_id):
-              if message_id not in EXPECTED_MESSAGE_IDS:
-                  raise Stop("Message ID is outside the fixed manifest.")
-              return f"/channels/{CHANNEL_ID}/messages/{message_id}"
-          
-          
-          def validate_route(method, path):
-              parents = {message_path(mid) for mid in EXPECTED_MESSAGE_IDS}
-              if (method == "GET" and path in parents | {"/users/@me", f"/channels/{CHANNEL_ID}"}) or (
-                  method == "PATCH" and path in parents
-              ):
-                  return
-              raise Stop("HTTP operation is outside the fixed read/edit allowlist.")
-          
-          
-          def validate_payload(payload, expected):
-              if payload != expected or set(payload) != {"embeds"}:
-                  raise Stop("PATCH must contain exactly the reviewed replacement embeds.")
-              embeds = payload["embeds"]
-              if not isinstance(embeds, list) or len(embeds) != 1:
-                  raise Stop("Exactly one replacement embed is required.")
-              embed = embeds[0]
-              allowed = {"title", "description", "color", "footer", "author", "thumbnail"}
-              if not set(embed) <= allowed or "fields" in embed:
-                  raise Stop("Unreviewed embed shape.")
-              if not (0 < len(embed["title"]) <= 256 and 0 < len(embed["description"]) <= 4096):
-                  raise Stop("Invalid embed text length.")
-              if embed.get("footer") != {"text": "Example"}:
-                  raise Stop("Only the single Example label is permitted.")
-              text = canonical(embed).lower()
-              for word in ("reference", "pmi", "surprisal", "n=", "unscored", "unavailable",
-                           "quality score", "synthetic", "review cues", "held out"):
-                  if word in text:
-                      raise Stop("Technical or disclaimer copy is forbidden in replacement embeds.")
-              if "author" in embed and embed["author"] != {"name": "Juggernaut", "icon_url": JUGGERNAUT_ICON}:
-                  raise Stop("Unreviewed author or icon.")
-              if "thumbnail" in embed and embed["thumbnail"] != {"url": RAPIER_ICON}:
-                  raise Stop("Unreviewed thumbnail.")
-              if len(canonical(embed)) > 6000:
-                  raise Stop("Embed exceeds the conservative size limit.")
-          
-          
-          def validate_manifest():
-              if tuple(t["message_id"] for t in MANIFEST) != EXPECTED_MESSAGE_IDS:
-                  raise Stop("Fixed message manifest changed.")
-              if tuple(t["match_id"] for t in MANIFEST) != (-101, -102):
-                  raise Stop("Fixed fixture identities changed.")
-              if set(ORIGINAL_EMBEDS) != set(EXPECTED_MESSAGE_IDS):
-                  raise Stop("Original receipt fixtures are incomplete.")
-              for target in MANIFEST:
-                  validate_payload(target["payload"], target["payload"])
-          
-          
-          def normalize_embeds(value):
-              """Strip only documented server-derived media properties, never visible copy."""
-              if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
-                  raise Stop("Unexpected returned embed count or type.")
-              embeds = copy.deepcopy(value)
-              for embed in embeds:
-                  if "type" in embed:
-                      if embed.pop("type") != "rich":
-                          raise Stop("Unexpected returned embed type.")
-                  if "flags" in embed and embed.pop("flags") != 0:
-                      raise Stop("Unexpected non-neutral embed flags.")
-                  for field in embed.get("fields", []):
-                      if isinstance(field, dict):
-                          field.setdefault("inline", False)
-                  for field, allowed in (("author", {"name", "icon_url", "url", "proxy_icon_url"}),
-                                         ("thumbnail", {"url", "proxy_url", "width", "height", "flags",
-                                                        "content_type", "placeholder", "placeholder_version"}),
-                                         ("footer", {"text", "icon_url", "proxy_icon_url"})):
-                      if field not in embed:
-                          continue
-                      media = embed[field]
-                      if not isinstance(media, dict) or not set(media) <= allowed:
-                          raise Stop("Unexpected returned embed metadata shape.")
-                      if "flags" in media and media["flags"] != 0:
-                          raise Stop("Unexpected non-neutral media flags.")
-                      if "content_type" in media and media["content_type"] != "image/png":
-                          raise Stop("Unexpected media content type.")
-                      for key in ("proxy_icon_url", "proxy_url", "width", "height", "flags",
-                                  "content_type", "placeholder", "placeholder_version"):
-                          media.pop(key, None)
-              return embeds
-          
-          
-          def verify_identity(message, target):
-              if not isinstance(message, dict):
-                  raise Stop("Discord did not return a message object.")
-              if message.get("id") != target["message_id"] or message.get("channel_id") != CHANNEL_ID:
-                  raise Stop("Message ID or channel did not match the receipt fixture.")
-              author = message.get("author", {})
-              if author.get("id") != BOT_ID or author.get("bot") is not True or message.get("webhook_id"):
-                  raise Stop("Message author did not match the receipt-bound bot.")
-              if message.get("type") != 0:
-                  raise Stop("Target is not a normal parent message.")
-              if message.get("content", "") != "" or message.get("components", []) != []:
-                  raise Stop("Unexpected content or components on a parent message.")
-              if message.get("attachments", []) != []:
-                  # No attachment field is ever PATCHed; stop for review if one was added.
-                  raise Stop("Unexpected parent attachment; preserve it and stop for review.")
-              if message.get("flags", 0) & (4 | 32768):
-                  raise Stop("Parent embeds are suppressed or the parent uses Components V2.")
-          
-          
-          def protected_state(message):
-              return {key: copy.deepcopy(message[key]) for key in PROTECTED_KEYS if key in message}
-          
-          
-          def verify_current(message, target):
-              verify_identity(message, target)
-              embeds = normalize_embeds(message.get("embeds"))
-              if embeds == target["payload"]["embeds"]:
-                  return "already_clean"
-              if embeds != ORIGINAL_EMBEDS[target["message_id"]]:
-                  raise Stop("Current embed differs from both the sent fixture and the reviewed replacement.")
-              return "original"
-          
-          
-          def verify_after(message, target, before):
-              verify_identity(message, target)
-              if normalize_embeds(message.get("embeds")) != target["payload"]["embeds"]:
-                  raise Stop("Readback did not match the exact reviewed replacement embeds.")
-              if protected_state(message) != protected_state(before):
-                  raise Stop("A protected message property changed; stop without rollback.")
-          
-          
-          class Discord:
-              def __init__(self, token):
-                  self._token = token
-                  self._opener = build_opener(ProxyHandler({}), HTTPSHandler(), NoRedirect())
-          
-              def request(self, method, path, payload=None):
-                  validate_route(method, path)
-                  if method == "PATCH":
-                      target = next(t for t in MANIFEST if message_path(t["message_id"]) == path)
-                      validate_payload(payload, target["payload"])
-                  elif payload is not None:
-                      raise Stop("GET requests may not carry a body.")
-                  body = None if payload is None else canonical(payload).encode()
-                  request = Request(API + path, data=body, method=method, headers={
-                      "Authorization": "Bot " + self._token,
-                      "Content-Type": "application/json",
-                      "User-Agent": "HeraldFixedParentCleanup/1.0",
-                  })
-                  try:
-                      with self._opener.open(request, timeout=25) as response:
-                          status = response.status
-                          raw = response.read(2_000_001)
-                  except HTTPError as exc:
-                      # Never log headers, raw bodies, URLs returned by the server, token,
-                      # arbitrary server message text, or exception repr. Status and code
-                      # retain the exact API error while excluding reflected secrets.
-                      status = exc.code
-                      try:
-                          error = json.loads(exc.read(16_384))
-                      except (ValueError, OSError):
-                          error = {}
-                      code = error.get("code") if isinstance(error, dict) else None
-                      suffix = f"; Discord code {code}" if type(code) is int else ""
-                      raise Stop(f"{method} {path}: HTTP {status}{suffix}; stopped without retry.") from None
-                  except (URLError, OSError, TimeoutError):
-                      raise Stop(f"{method} {path}: transport failure; outcome may be uncertain; no retry.") from None
-                  if status != 200:
-                      raise Stop(f"{method} {path}: unexpected HTTP {status}; stopped without retry.")
-                  if len(raw) > 2_000_000:
-                      raise Stop(f"{method} {path}: oversized response; stopped without retry.")
-                  try:
-                      result = json.loads(raw)
-                  except (ValueError, UnicodeError):
-                      raise Stop(f"{method} {path}: invalid JSON response; stopped without retry.") from None
-                  if not isinstance(result, dict):
-                      raise Stop(f"{method} {path}: response was not an object; stopped without retry.")
-                  return result
-          
-          
-          def now():
-              return datetime.now(timezone.utc).isoformat()
-          
-          
-          def preview():
-              validate_manifest()
-              return {
-                  "mode": "dry-run", "network_calls": 0, "manifest_version": MANIFEST_VERSION,
-                  "manifest_sha256": digest(MANIFEST), "guild_id": GUILD_ID, "channel_id": CHANNEL_ID,
-                  "expected_bot_id": BOT_ID, "source_run_id": SOURCE_RUN_ID, "source_sha": SOURCE_SHA,
-                  "targets": [{"example": t["example"], "message_id": t["message_id"],
-                               "method": "PATCH", "path": message_path(t["message_id"]),
-                               "payload": t["payload"]} for t in MANIFEST],
-              }
-          
-          
-          def apply(client, save):
-              """Injectable transport and audit sink allow fully offline safety tests."""
-              validate_manifest()
-              audit = {"mode": "apply", "manifest_version": MANIFEST_VERSION,
-                       "manifest_sha256": digest(MANIFEST), "status": "preflight", "started_at": now(),
-                       "channel_id": CHANNEL_ID, "expected_bot_id": BOT_ID,
-                       "targets": [{"message_id": t["message_id"], "status": "pending"} for t in MANIFEST]}
-              save(audit)
-              try:
-                  bot = client.request("GET", "/users/@me")
-                  if bot.get("id") != BOT_ID or bot.get("bot") is not True:
-                      raise Stop("Authenticated bot does not match the verified receipt-bound bot.")
-                  channel = client.request("GET", f"/channels/{CHANNEL_ID}")
-                  if channel.get("id") != CHANNEL_ID or channel.get("guild_id") != GUILD_ID or channel.get("type") != 0:
-                      raise Stop("Channel/guild is not the fixed text-channel destination.")
-                  # Preflight BOTH parents before the first write.
-                  before = {}
-                  for target in MANIFEST:
-                      message = client.request("GET", message_path(target["message_id"]))
-                      state = verify_current(message, target)
-                      before[target["message_id"]] = message
-                      audit["targets"][target["example"] - 1]["status"] = state
-                  save(audit)
-                  for target, receipt in zip(MANIFEST, audit["targets"]):
-                      path = message_path(target["message_id"])
-                      original = before[target["message_id"]]
-                      if receipt["status"] == "already_clean":
-                          verify_after(original, target, original)
-                          continue
-                      # Refuse concurrent edits immediately before PATCHing each target.
-                      current = client.request("GET", path)
-                      if normalize_embeds(current.get("embeds")) != normalize_embeds(original.get("embeds")):
-                          raise Stop("Parent embeds changed after preflight; stopped without overwrite.")
-                      verify_identity(current, target)
-                      if protected_state(current) != protected_state(original):
-                          raise Stop("Protected parent properties changed after preflight.")
-                      receipt["status"] = "patch_started_outcome_unconfirmed"
-                      save(audit)  # Durable intent before any write.
-                      response = client.request("PATCH", path, copy.deepcopy(target["payload"]))
-                      verify_after(response, target, original)
-                      readback = client.request("GET", path)
-                      verify_after(readback, target, original)
-                      receipt.update(status="verified", embed_sha256=digest(target["payload"]["embeds"]))
-                      save(audit)
-                  audit.update(status="verified", finished_at=now())
-                  save(audit)
-                  return audit
-              except Stop as exc:
-                  audit.update(status="stopped", error=str(exc), finished_at=now(),
-                               retry_policy="Do not rerun automatically. Reconcile existing IDs before any retry.")
-                  save(audit)
-                  raise
-          
-          
-          class AuditFile:
-              def __init__(self, directory):
-                  directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-                  self.path = directory / "parent-cleanup-result.json"
-                  # Never overwrite an earlier/uncertain operation's audit.
-                  with self.path.open("x", encoding="utf-8") as stream:
-                      stream.write('{"status":"initialized"}\n')
-                      stream.flush()
-                      os.fsync(stream.fileno())
-                  self.path.chmod(0o600)
-          
-              def __call__(self, data):
-                  temporary = self.path.with_suffix(".tmp")
-                  with temporary.open("w", encoding="utf-8") as stream:
-                      stream.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-                      stream.flush()
-                      os.fsync(stream.fileno())
-                  temporary.chmod(0o600)
-                  temporary.replace(self.path)
-          
-          
-          def main(argv=None):
-              parser = argparse.ArgumentParser(description=__doc__)
-              mode = parser.add_mutually_exclusive_group()
-              mode.add_argument("--dry-run", action="store_true", help="Offline preview (the default).")
-              mode.add_argument("--apply", action="store_true", help="Edit the two fixed IDs in GitHub Actions only.")
-              parser.add_argument("--audit-dir", type=Path, help="Required for apply; receipt must not already exist.")
-              args = parser.parse_args(argv)
-              try:
-                  if not args.apply:
-                      print(json.dumps(preview(), ensure_ascii=False, indent=2))
-                      return 0
-                  if (os.environ.get("GITHUB_ACTIONS") != "true" or
-                          os.environ.get("GITHUB_REPOSITORY") != REPOSITORY or
-                          os.environ.get("GITHUB_RUN_ATTEMPT") != "1" or
-                          os.environ.get("RUNNER_DEBUG") == "1"):
-                      raise Stop("Apply requires the authorized repository's non-debug, first-attempt GitHub runner.")
-                  if args.audit_dir is None:
-                      raise Stop("Apply requires --audit-dir for a durable, secret-free receipt.")
-                  token = os.environ.get("DISCORD_BOT_TOKEN", "")
-                  if not token.strip() or token != token.strip() or any(c.isspace() for c in token):
-                      raise Stop("DISCORD_BOT_TOKEN must be supplied only by the runner's secret environment.")
-                  save = AuditFile(args.audit_dir)
-                  result = apply(Discord(token), save)
-                  print(json.dumps(result, ensure_ascii=False, indent=2))
-                  return 0
-              except Stop as exc:
-                  print(str(exc), file=sys.stderr)
-                  return 1
-              except (OSError, ValueError, TypeError, KeyError):
-                  # Do not print arbitrary exception details or any raw API response.
-                  print("Local validation/audit failure. Stop and inspect the receipt; do not retry automatically.", file=sys.stderr)
-                  return 1
-          
-          
-          if __name__ == "__main__":
-              raise SystemExit(main())
-          PY_CLEAN_HERALD
-          echo 'a837072665d1ac9635c1c1774a1a68e1990974b18b81a66c43cd1b7302802e77  '"$RUNNER_TEMP/clean_example_parents.py" | sha256sum -c -
-          python3 -m py_compile "$RUNNER_TEMP/clean_example_parents.py"
-          python3 "$RUNNER_TEMP/clean_example_parents.py" --dry-run
-      - name: Edit only the two verified parent messages and verify readback
-        shell: bash
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: |
-          set +x
-          set -euo pipefail
-          python3 "$RUNNER_TEMP/clean_example_parents.py" --apply --audit-dir "$RUNNER_TEMP/herald-parent-cleanup"
-      - name: Print only the secret-free operation receipt
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          if test -f "$RUNNER_TEMP/herald-parent-cleanup/parent-cleanup-result.json"; then
-            cat "$RUNNER_TEMP/herald-parent-cleanup/parent-cleanup-result.json"
-          fi
+    - name: Prepare and verify reviewed cleanup script without credentials
+      shell: bash
+      run: "set -euo pipefail\ntest \"$GITHUB_RUN_ATTEMPT\" = 1\ntest \"$GITHUB_RUN_NUMBER\" = 2\ntest \"${RUNNER_DEBUG:-}\" != 1\ncat > \"$RUNNER_TEMP/clean_example_parents.py\" <<'PY_CLEAN_HERALD'\n#!/usr/bin/env python3\n\"\"\"Review a fixed two-message edit offline; --apply only in the GitHub runner.\n\nNo imports from the bot, token files, retries, creates, deletes, thread edits,\nchannel edits, uploads, webhook routes, or arbitrary destinations are supported.\n\"\"\"\nfrom __future__ import annotations\n\nimport argparse\nimport copy\nfrom datetime import datetime, timezone\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport re\nimport sys\nfrom urllib.error import HTTPError, URLError\nfrom urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener\n\nAPI = \"https://discord.com/api/v10\"\nGUILD_ID = \"1392724275538038826\"\nCHANNEL_ID = \"1392724276334825584\"\nBOT_ID = \"1393107291741618359\"\nREPOSITORY = \"clsandoval/herald-scraper-bot\"\
+        \nMANIFEST_VERSION = \"clean-existing-example-parents-20261007-v1\"\nSOURCE_RUN_ID = \"37563738367\"\nSOURCE_SHA = \"9136e5290c196ebc1b7bdeafd5da4d0459d3c9ab\"\nJUGGERNAUT_ICON = \"https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/heroes/juggernaut.png\"\nRAPIER_ICON = \"https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/rapier.png\"\n# Exact original embed bodies from the verified send-time SQLite receipts.\nORIGINAL_EMBEDS = {'1557223202902515713': [{'color': 13148220,\n                          'description': 'Scored build evidence. Invented match and reference '\n                                         'data; two team images in the thread.',\n                          'fields': [{'inline': True, 'name': '⏱️ Duration', 'value': '82m 0s'},\n                                     {'inline': True,\n                                      'name': '⚔️ Kills',\n                                      'value': '122 · 1.49/min'},\n                 \
+        \                    {'inline': False,\n                                      'name': '\U0001F50E Review cues',\n                                      'value': '• <:h_antimage:1525034761998041229> Anti-Mage · '\n                                               '<:i_armlet:1525035281844011049> Armlet of '\n                                               'Mordiggian @20m · PMI 5.4\\n'\n                                               '• <:h_antimage:1525034761998041229> Anti-Mage · '\n                                               'pick 1: Counterspell · surprisal 2.3'},\n                                     {'inline': False,\n                                      'name': 'Reference population',\n                                      'value': 'Synthetic · 40 generated matches · invented patch '\n                                               '1 · target held out.'}],\n                          'footer': {'text': 'SYNTHETIC EXAMPLE · invented data; not a quality '\n                     \
+        \                        'score'},\n                          'title': '\U0001F9EA EXAMPLE 1 · Synthetic Herald report'}],\n '1557223226663505994': [{'color': 13148220,\n                          'description': 'Cold start and missing evidence. Invented match and '\n                                         'reference data; two team images in the thread.',\n                          'fields': [{'inline': True, 'name': '⏱️ Duration', 'value': '82m 0s'},\n                                     {'inline': True,\n                                      'name': '⚔️ Kills',\n                                      'value': '122 · 1.49/min'},\n                                     {'inline': False,\n                                      'name': '\U0001F50E Review cues',\n                                      'value': 'No standout cue recorded.'},\n                                     {'inline': False,\n                                      'name': 'Reference population',\n                     \
+        \                 'value': 'Synthetic · 0 matches. Unscored does not mean '\n                                               'normal; missing logs stay unavailable.'}],\n                          'footer': {'text': 'SYNTHETIC EXAMPLE · invented data; not a quality '\n                                             'score'},\n                          'title': '\U0001F9EA EXAMPLE 2 · Synthetic Herald report'}]}\nMANIFEST = (\n    {\n        \"example\": 1,\n        \"match_id\": -101,\n        \"message_id\": \"1557223202902515713\",\n        \"payload\": {\"embeds\": [{\n            \"author\": {\"name\": \"Juggernaut\", \"icon_url\": JUGGERNAUT_ICON},\n            \"title\": \"Rapier → dead in 35s\",\n            \"description\": \"82m · 122 kills\",\n            \"color\": 13148220,\n            \"thumbnail\": {\"url\": RAPIER_ICON},\n            \"footer\": {\"text\": \"Example\"},\n        }]},\n    },\n    {\n        \"example\": 2,\n        \"match_id\": -102,\n        \"message_id\"\
+        : \"1557223226663505994\",\n        \"payload\": {\"embeds\": [{\n            \"title\": \"122 kills in 82 minutes\",\n            \"description\": \"Radiant 55 · Dire 67\",\n            \"color\": 13148220,\n            \"footer\": {\"text\": \"Example\"},\n        }]},\n    },\n)\nEXPECTED_MESSAGE_IDS = (\"1557223202902515713\", \"1557223226663505994\")\nPROTECTED_KEYS = (\"content\", \"attachments\", \"components\", \"flags\", \"pinned\", \"tts\",\n                  \"mention_everyone\", \"mention_roles\", \"mentions\", \"message_reference\", \"sticker_items\")\n\n\nclass Stop(Exception):\n    \"\"\"A deliberately bounded, secret-free diagnostic.\"\"\"\n\n\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        # Never forward the Authorization header to a redirect destination.\n        return None\n\n\ndef canonical(value):\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=False)\n\
+        \n\ndef digest(value):\n    return hashlib.sha256(canonical(value).encode()).hexdigest()\n\n\ndef message_path(message_id):\n    if message_id not in EXPECTED_MESSAGE_IDS:\n        raise Stop(\"Message ID is outside the fixed manifest.\")\n    return f\"/channels/{CHANNEL_ID}/messages/{message_id}\"\n\n\ndef validate_route(method, path):\n    parents = {message_path(mid) for mid in EXPECTED_MESSAGE_IDS}\n    if (method == \"GET\" and path in parents | {\"/users/@me\", f\"/channels/{CHANNEL_ID}\"}) or (\n        method == \"PATCH\" and path in parents\n    ):\n        return\n    raise Stop(\"HTTP operation is outside the fixed read/edit allowlist.\")\n\n\ndef validate_payload(payload, expected):\n    if payload != expected or set(payload) != {\"embeds\"}:\n        raise Stop(\"PATCH must contain exactly the reviewed replacement embeds.\")\n    embeds = payload[\"embeds\"]\n    if not isinstance(embeds, list) or len(embeds) != 1:\n        raise Stop(\"Exactly one replacement embed\
+        \ is required.\")\n    embed = embeds[0]\n    allowed = {\"title\", \"description\", \"color\", \"footer\", \"author\", \"thumbnail\"}\n    if not set(embed) <= allowed or \"fields\" in embed:\n        raise Stop(\"Unreviewed embed shape.\")\n    if not (0 < len(embed[\"title\"]) <= 256 and 0 < len(embed[\"description\"]) <= 4096):\n        raise Stop(\"Invalid embed text length.\")\n    if embed.get(\"footer\") != {\"text\": \"Example\"}:\n        raise Stop(\"Only the single Example label is permitted.\")\n    text = canonical(embed).lower()\n    for word in (\"reference\", \"pmi\", \"surprisal\", \"n=\", \"unscored\", \"unavailable\",\n                 \"quality score\", \"synthetic\", \"review cues\", \"held out\"):\n        if word in text:\n            raise Stop(\"Technical or disclaimer copy is forbidden in replacement embeds.\")\n    if \"author\" in embed and embed[\"author\"] != {\"name\": \"Juggernaut\", \"icon_url\": JUGGERNAUT_ICON}:\n        raise Stop(\"Unreviewed\
+        \ author or icon.\")\n    if \"thumbnail\" in embed and embed[\"thumbnail\"] != {\"url\": RAPIER_ICON}:\n        raise Stop(\"Unreviewed thumbnail.\")\n    if len(canonical(embed)) > 6000:\n        raise Stop(\"Embed exceeds the conservative size limit.\")\n\n\ndef validate_manifest():\n    if tuple(t[\"message_id\"] for t in MANIFEST) != EXPECTED_MESSAGE_IDS:\n        raise Stop(\"Fixed message manifest changed.\")\n    if tuple(t[\"match_id\"] for t in MANIFEST) != (-101, -102):\n        raise Stop(\"Fixed fixture identities changed.\")\n    if set(ORIGINAL_EMBEDS) != set(EXPECTED_MESSAGE_IDS):\n        raise Stop(\"Original receipt fixtures are incomplete.\")\n    for target in MANIFEST:\n        validate_payload(target[\"payload\"], target[\"payload\"])\n\n\ndef normalize_embeds(value):\n    \"\"\"Strip only documented server-derived media properties, never visible copy.\"\"\"\n    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):\n        raise\
+        \ Stop(\"Unexpected returned embed count or type.\")\n    embeds = copy.deepcopy(value)\n    for embed in embeds:\n        if \"type\" in embed:\n            if embed.pop(\"type\") != \"rich\":\n                raise Stop(\"Unexpected returned embed type.\")\n        if \"flags\" in embed and embed.pop(\"flags\") != 0:\n            raise Stop(\"Unexpected non-neutral embed flags.\")\n        # Read-only live inspection of both fixed parents observed this exact\n        # server scan marker; it is not authored embed content.\n        if \"content_scan_version\" in embed:\n            version = embed.pop(\"content_scan_version\")\n            if type(version) is not int or version != 4:\n                raise Stop(\"Unexpected embed content scan version.\")\n        for field in embed.get(\"fields\", []):\n            if isinstance(field, dict):\n                field.setdefault(\"inline\", False)\n        for field, allowed in ((\"author\", {\"name\", \"icon_url\", \"url\", \"proxy_icon_url\"\
+        }),\n                               (\"thumbnail\", {\"url\", \"proxy_url\", \"width\", \"height\", \"flags\",\n                                              \"content_type\", \"placeholder\", \"placeholder_version\"}),\n                               (\"footer\", {\"text\", \"icon_url\", \"proxy_icon_url\"})):\n            if field not in embed:\n                continue\n            media = embed[field]\n            if not isinstance(media, dict) or not set(media) <= allowed:\n                raise Stop(\"Unexpected returned embed metadata shape.\")\n            if \"flags\" in media and media[\"flags\"] != 0:\n                raise Stop(\"Unexpected non-neutral media flags.\")\n            if \"content_type\" in media and media[\"content_type\"] != \"image/png\":\n                raise Stop(\"Unexpected media content type.\")\n            for key in (\"proxy_icon_url\", \"proxy_url\", \"width\", \"height\", \"flags\",\n                        \"content_type\", \"placeholder\"\
+        , \"placeholder_version\"):\n                media.pop(key, None)\n    return embeds\n\n\ndef verify_identity(message, target):\n    if not isinstance(message, dict):\n        raise Stop(\"Discord did not return a message object.\")\n    if message.get(\"id\") != target[\"message_id\"] or message.get(\"channel_id\") != CHANNEL_ID:\n        raise Stop(\"Message ID or channel did not match the receipt fixture.\")\n    author = message.get(\"author\", {})\n    if author.get(\"id\") != BOT_ID or author.get(\"bot\") is not True or message.get(\"webhook_id\"):\n        raise Stop(\"Message author did not match the receipt-bound bot.\")\n    if message.get(\"type\") != 0:\n        raise Stop(\"Target is not a normal parent message.\")\n    if message.get(\"content\", \"\") != \"\" or message.get(\"components\", []) != []:\n        raise Stop(\"Unexpected content or components on a parent message.\")\n    if message.get(\"attachments\", []) != []:\n        # No attachment field is ever PATCHed;\
+        \ stop for review if one was added.\n        raise Stop(\"Unexpected parent attachment; preserve it and stop for review.\")\n    if message.get(\"flags\", 0) & (4 | 32768):\n        raise Stop(\"Parent embeds are suppressed or the parent uses Components V2.\")\n\n\ndef protected_state(message):\n    return {key: copy.deepcopy(message[key]) for key in PROTECTED_KEYS if key in message}\n\n\ndef verify_current(message, target):\n    verify_identity(message, target)\n    embeds = normalize_embeds(message.get(\"embeds\"))\n    if embeds == target[\"payload\"][\"embeds\"]:\n        return \"already_clean\"\n    if embeds != ORIGINAL_EMBEDS[target[\"message_id\"]]:\n        raise Stop(\"Current embed differs from both the sent fixture and the reviewed replacement.\")\n    return \"original\"\n\n\ndef verify_after(message, target, before):\n    verify_identity(message, target)\n    if normalize_embeds(message.get(\"embeds\")) != target[\"payload\"][\"embeds\"]:\n        raise Stop(\"Readback\
+        \ did not match the exact reviewed replacement embeds.\")\n    if protected_state(message) != protected_state(before):\n        raise Stop(\"A protected message property changed; stop without rollback.\")\n\n\nclass Discord:\n    def __init__(self, token):\n        self._token = token\n        self._opener = build_opener(ProxyHandler({}), HTTPSHandler(), NoRedirect())\n\n    def request(self, method, path, payload=None):\n        validate_route(method, path)\n        if method == \"PATCH\":\n            target = next(t for t in MANIFEST if message_path(t[\"message_id\"]) == path)\n            validate_payload(payload, target[\"payload\"])\n        elif payload is not None:\n            raise Stop(\"GET requests may not carry a body.\")\n        body = None if payload is None else canonical(payload).encode()\n        request = Request(API + path, data=body, method=method, headers={\n            \"Authorization\": \"Bot \" + self._token,\n            \"Content-Type\": \"application/json\"\
+        ,\n            \"User-Agent\": \"HeraldFixedParentCleanup/1.0\",\n        })\n        try:\n            with self._opener.open(request, timeout=25) as response:\n                status = response.status\n                raw = response.read(2_000_001)\n        except HTTPError as exc:\n            # Never log headers, raw bodies, URLs returned by the server, token,\n            # arbitrary server message text, or exception repr. Status and code\n            # retain the exact API error while excluding reflected secrets.\n            status = exc.code\n            try:\n                error = json.loads(exc.read(16_384))\n            except (ValueError, OSError):\n                error = {}\n            code = error.get(\"code\") if isinstance(error, dict) else None\n            suffix = f\"; Discord code {code}\" if type(code) is int else \"\"\n            raise Stop(f\"{method} {path}: HTTP {status}{suffix}; stopped without retry.\") from None\n        except (URLError, OSError,\
+        \ TimeoutError):\n            raise Stop(f\"{method} {path}: transport failure; outcome may be uncertain; no retry.\") from None\n        if status != 200:\n            raise Stop(f\"{method} {path}: unexpected HTTP {status}; stopped without retry.\")\n        if len(raw) > 2_000_000:\n            raise Stop(f\"{method} {path}: oversized response; stopped without retry.\")\n        try:\n            result = json.loads(raw)\n        except (ValueError, UnicodeError):\n            raise Stop(f\"{method} {path}: invalid JSON response; stopped without retry.\") from None\n        if not isinstance(result, dict):\n            raise Stop(f\"{method} {path}: response was not an object; stopped without retry.\")\n        return result\n\n\ndef now():\n    return datetime.now(timezone.utc).isoformat()\n\n\ndef preview():\n    validate_manifest()\n    return {\n        \"mode\": \"dry-run\", \"network_calls\": 0, \"manifest_version\": MANIFEST_VERSION,\n        \"manifest_sha256\": digest(MANIFEST),\
+        \ \"guild_id\": GUILD_ID, \"channel_id\": CHANNEL_ID,\n        \"expected_bot_id\": BOT_ID, \"source_run_id\": SOURCE_RUN_ID, \"source_sha\": SOURCE_SHA,\n        \"targets\": [{\"example\": t[\"example\"], \"message_id\": t[\"message_id\"],\n                     \"method\": \"PATCH\", \"path\": message_path(t[\"message_id\"]),\n                     \"payload\": t[\"payload\"]} for t in MANIFEST],\n    }\n\n\ndef apply(client, save):\n    \"\"\"Injectable transport and audit sink allow fully offline safety tests.\"\"\"\n    validate_manifest()\n    audit = {\"mode\": \"apply\", \"manifest_version\": MANIFEST_VERSION,\n             \"manifest_sha256\": digest(MANIFEST), \"status\": \"preflight\", \"started_at\": now(),\n             \"channel_id\": CHANNEL_ID, \"expected_bot_id\": BOT_ID,\n             \"targets\": [{\"message_id\": t[\"message_id\"], \"status\": \"pending\"} for t in MANIFEST]}\n    save(audit)\n    try:\n        bot = client.request(\"GET\", \"/users/@me\")\n  \
+        \      if bot.get(\"id\") != BOT_ID or bot.get(\"bot\") is not True:\n            raise Stop(\"Authenticated bot does not match the verified receipt-bound bot.\")\n        channel = client.request(\"GET\", f\"/channels/{CHANNEL_ID}\")\n        if channel.get(\"id\") != CHANNEL_ID or channel.get(\"guild_id\") != GUILD_ID or channel.get(\"type\") != 0:\n            raise Stop(\"Channel/guild is not the fixed text-channel destination.\")\n        # Preflight BOTH parents before the first write.\n        before = {}\n        for target in MANIFEST:\n            message = client.request(\"GET\", message_path(target[\"message_id\"]))\n            state = verify_current(message, target)\n            before[target[\"message_id\"]] = message\n            audit[\"targets\"][target[\"example\"] - 1][\"status\"] = state\n        save(audit)\n        for target, receipt in zip(MANIFEST, audit[\"targets\"]):\n            path = message_path(target[\"message_id\"])\n            original = before[target[\"\
+        message_id\"]]\n            if receipt[\"status\"] == \"already_clean\":\n                verify_after(original, target, original)\n                continue\n            # Refuse concurrent edits immediately before PATCHing each target.\n            current = client.request(\"GET\", path)\n            if normalize_embeds(current.get(\"embeds\")) != normalize_embeds(original.get(\"embeds\")):\n                raise Stop(\"Parent embeds changed after preflight; stopped without overwrite.\")\n            verify_identity(current, target)\n            if protected_state(current) != protected_state(original):\n                raise Stop(\"Protected parent properties changed after preflight.\")\n            receipt[\"status\"] = \"patch_started_outcome_unconfirmed\"\n            save(audit)  # Durable intent before any write.\n            response = client.request(\"PATCH\", path, copy.deepcopy(target[\"payload\"]))\n            verify_after(response, target, original)\n            readback\
+        \ = client.request(\"GET\", path)\n            verify_after(readback, target, original)\n            receipt.update(status=\"verified\", embed_sha256=digest(target[\"payload\"][\"embeds\"]))\n            save(audit)\n        audit.update(status=\"verified\", finished_at=now())\n        save(audit)\n        return audit\n    except Stop as exc:\n        audit.update(status=\"stopped\", error=str(exc), finished_at=now(),\n                     retry_policy=\"Do not rerun automatically. Reconcile existing IDs before any retry.\")\n        save(audit)\n        raise\n\n\nclass AuditFile:\n    def __init__(self, directory):\n        directory.mkdir(mode=0o700, parents=True, exist_ok=True)\n        self.path = directory / \"parent-cleanup-result.json\"\n        # Never overwrite an earlier/uncertain operation's audit.\n        with self.path.open(\"x\", encoding=\"utf-8\") as stream:\n            stream.write('{\"status\":\"initialized\"}\\n')\n            stream.flush()\n            os.fsync(stream.fileno())\n\
+        \        self.path.chmod(0o600)\n\n    def __call__(self, data):\n        temporary = self.path.with_suffix(\".tmp\")\n        with temporary.open(\"w\", encoding=\"utf-8\") as stream:\n            stream.write(json.dumps(data, ensure_ascii=False, indent=2) + \"\\n\")\n            stream.flush()\n            os.fsync(stream.fileno())\n        temporary.chmod(0o600)\n        temporary.replace(self.path)\n\n\ndef main(argv=None):\n    parser = argparse.ArgumentParser(description=__doc__)\n    mode = parser.add_mutually_exclusive_group()\n    mode.add_argument(\"--dry-run\", action=\"store_true\", help=\"Offline preview (the default).\")\n    mode.add_argument(\"--apply\", action=\"store_true\", help=\"Edit the two fixed IDs in GitHub Actions only.\")\n    parser.add_argument(\"--audit-dir\", type=Path, help=\"Required for apply; receipt must not already exist.\")\n    args = parser.parse_args(argv)\n    try:\n        if not args.apply:\n            print(json.dumps(preview(), ensure_ascii=False,\
+        \ indent=2))\n            return 0\n        if (os.environ.get(\"GITHUB_ACTIONS\") != \"true\" or\n                os.environ.get(\"GITHUB_REPOSITORY\") != REPOSITORY or\n                os.environ.get(\"GITHUB_RUN_ATTEMPT\") != \"1\" or\n                os.environ.get(\"RUNNER_DEBUG\") == \"1\"):\n            raise Stop(\"Apply requires the authorized repository's non-debug, first-attempt GitHub runner.\")\n        if args.audit_dir is None:\n            raise Stop(\"Apply requires --audit-dir for a durable, secret-free receipt.\")\n        token = os.environ.get(\"DISCORD_BOT_TOKEN\", \"\")\n        if not token.strip() or token != token.strip() or any(c.isspace() for c in token):\n            raise Stop(\"DISCORD_BOT_TOKEN must be supplied only by the runner's secret environment.\")\n        save = AuditFile(args.audit_dir)\n        result = apply(Discord(token), save)\n        print(json.dumps(result, ensure_ascii=False, indent=2))\n        return 0\n    except Stop as exc:\n\
+        \        print(str(exc), file=sys.stderr)\n        return 1\n    except (OSError, ValueError, TypeError, KeyError):\n        # Do not print arbitrary exception details or any raw API response.\n        print(\"Local validation/audit failure. Stop and inspect the receipt; do not retry automatically.\", file=sys.stderr)\n        return 1\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\nPY_CLEAN_HERALD\necho '0f00a4fa6dc9180dba307644c451ace399fb14153b35c1791e2c77aa94353eef  '\"$RUNNER_TEMP/clean_example_parents.py\" | sha256sum -c -\npython3 -m py_compile \"$RUNNER_TEMP/clean_example_parents.py\"\npython3 \"$RUNNER_TEMP/clean_example_parents.py\" --dry-run\n"
+    - name: Edit only the two verified parent messages and verify readback
+      shell: bash
+      env:
+        DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      run: 'set +x
+
+        set -euo pipefail
+
+        python3 "$RUNNER_TEMP/clean_example_parents.py" --apply --audit-dir "$RUNNER_TEMP/herald-parent-cleanup"
+
+        '
+    - name: Print only the secret-free operation receipt
+      if: ${{ always() }}
+      shell: bash
+      run: "if test -f \"$RUNNER_TEMP/herald-parent-cleanup/parent-cleanup-result.json\"; then\n  cat \"$RUNNER_TEMP/herald-parent-cleanup/parent-cleanup-result.json\"\nfi\n"
+'on':
+  push:
+    branches:
+    - test/herald-clean-parents-20261007-0300
