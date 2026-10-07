@@ -32,12 +32,21 @@ def explorer_fetch(client, sql):
             time.sleep(5)
             continue
         resp.raise_for_status()
-        data = resp.json()
-        if data.get("err"):
-            log.warning(f"explorer_fetch sql error: {data['err']}, retrying")
-            time.sleep(5)
+        try:
+            data = resp.json()
+        except ValueError:
+            log.warning("explorer_fetch invalid JSON; discovery is incomplete")
+            return None
+        if not isinstance(data, dict) or data.get("err") or data.get("error"):
+            log.warning("explorer_fetch error response; discovery is incomplete")
+            if _attempt < 3:
+                time.sleep(5)
             continue
-        return data.get("rows") or []
+        rows = data.get("rows")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            log.warning("explorer_fetch invalid rows; discovery is incomplete")
+            return None
+        return rows
     return None
 
 
@@ -62,14 +71,48 @@ def stratz_fetch_batch(client, ids, fields, strict=False):
             log.warning("stratz_fetch_batch 429, sleeping 30s")
             time.sleep(30)
             continue
+        if resp.status_code >= 500:
+            log.warning("stratz_fetch_batch server failure %s, retrying", resp.status_code)
+            if _attempt < 2:
+                time.sleep(3)
+            continue
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            if strict:
+                raise RuntimeError("Stratz returned invalid JSON; report batch incomplete") from None
+            log.warning("stratz_fetch_batch invalid JSON; preserving pending candidates")
+            return "RATELIMIT"
+        if not isinstance(data, dict):
+            if strict:
+                raise RuntimeError("Stratz returned an invalid response; report batch incomplete")
+            return "RATELIMIT"
         if data.get("errors"):
             if strict:
                 raise RuntimeError("Stratz GraphQL errors; report batch incomplete")
-            log.warning(f"stratz_fetch_batch errors: {str(data['errors'])[:200]}")
-        d = data.get("data") or {}
-        if strict and any(f"m{i}" not in d for i in range(len(ids))):
-            raise RuntimeError("Stratz response omitted report matches")
+            # Provider errors are not evidence of an unparsed match. Returning
+            # None here used to burn menu attempts and eventually drop candidates.
+            log.warning("stratz_fetch_batch GraphQL errors; preserving pending candidates")
+            return "RATELIMIT"
+        d = data.get("data")
+        if not isinstance(d, dict) or any(f"m{i}" not in d for i in range(len(ids))):
+            if strict:
+                raise RuntimeError("Stratz response omitted report matches")
+            log.warning("stratz_fetch_batch incomplete aliases; preserving pending candidates")
+            return "RATELIMIT"
+        if any(value is not None and (not isinstance(value, dict) or not value)
+               for value in (d[f"m{i}"] for i in range(len(ids)))):
+            if strict:
+                raise RuntimeError("Stratz returned invalid match data; report batch incomplete")
+            log.warning("stratz_fetch_batch invalid match shape; preserving pending candidates")
+            return "RATELIMIT"
+        if any(value is not None and "id" in value and
+               (type(value["id"]) is not int or value["id"] != mid)
+               for mid, value in ((mid, d[f"m{i}"]) for i, mid in enumerate(ids))):
+            if strict:
+                raise RuntimeError("Stratz returned mismatched match IDs; report batch incomplete")
+            log.warning("stratz_fetch_batch mismatched IDs; preserving pending candidates")
+            return "RATELIMIT"
         return {mid: d.get(f"m{i}") for i, mid in enumerate(ids)}
     return "RATELIMIT"  # retries exhausted: rate limit or transport failure

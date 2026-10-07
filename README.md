@@ -9,6 +9,8 @@ Dota 2 Herald matches worth reviewing. **Two modes; the menu is opt-in.**
 
 The reporter preserves the legacy selection used for the 95-post run: duration **>4,500s**, average rank **≤16**, no Stratz player rank **>15**, ten players and **OpenDota leaver status 0** for each. Missing accounts/leaver evidence rejects the match; unknown account rank is allowed. No KPM/lobby cutoff, LLM summaries or ranking framework. Default window: four days ago to three days ago; repeat 24 hours after each pass.
 
+Report cards include final items, twelve numbered early skill picks, timestamped observations, and experimental hero-relative item PMI / hero-and-mode skill surprisal. The reporter builds its own compact reference from already-fetched eligible reports; a fresh cache or new patch explicitly shows **unscored** until a later pass has at least 30 matching hero builds (skills also require the same mode and supported pick positions). This compares long-Herald reports, not universal Dota meta. These are review cues, not a validated quality or retention score. No menu database, extra API request, or LLM call is added. [Reference limits and warm-up](docs/ARCHITECTURE.md#reporter-build-evidence).
+
 <details>
 <summary><strong>Data flows and shared code</strong></summary>
 
